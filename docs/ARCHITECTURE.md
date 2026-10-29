@@ -57,6 +57,8 @@ Contract:
 
 The mapping to IPC text (`noise pink`, `volume 40`) and the inverse parser live here, so there is only one semantics.
 
+`wn_engine_command` returns 0 on success and non-zero for an unknown or invalid command, so the IPC layer can answer with an error instead of `ok`.
+
 ---
 
 ## 3. `core/config.c`
@@ -93,7 +95,7 @@ The atomic write (temp file + `fsync` + `rename`) lives in the layer that owns I
 typedef struct {
     uint64_t rng;          /* PCG32, one per channel */
     int      type;
-    float    b0..b6;       /* Kellet, pink */
+    float    b[7];         /* Kellet, pink */
     float    brown, dc_x, dc_y;
     float    gain;
 } wn_noise;
@@ -184,6 +186,7 @@ Details:
 - One command per line, newline-terminated; replies are `ok` or `key=value` lines.
 - Fixed line limit (e.g. 256 bytes); longer commands are a usage error.
 - An orphaned socket (dead process) is removed before creating a new one.
+- An error reply from the daemon makes the client print the message to `stderr` and exit 2.
 - IPC failure returns exit code 3.
 - `--foreground` keeps the process attached to the terminal and logs lifecycle events to `stderr`.
 
@@ -193,7 +196,7 @@ Details:
 
 Turns `argv` into `wn_cmd` through `core/command.c` and formats output. Flags and precedence rules live in PRD section 7; do not duplicate them here.
 
-- `--status` prints exactly the six lines from PRD section 8, in order.
+- `--status` prints exactly the six lines from PRD section 6, FR-08, in order.
 - `--help` and `--version` take precedence over everything.
 - Errors go to `stderr` prefixed with `tinyambient: `.
 - Exit codes: 0 success, 1 runtime failure, 2 usage error, 3 IPC failure.

@@ -3,7 +3,7 @@
 **Version:** 1.0
 **Date:** 2026-10-29
 **Status:** Approved for v1 implementation
-**Companion document:** `AGENTS.md` (architecture, DSP, toolchain, size budget)
+**Companion documents:** `AGENTS.md` (constraints, layers, toolchain, size budget) and `docs/ARCHITECTURE.md` (per-component implementation detail).
 
 This document defines product scope and observable behavior. `AGENTS.md` defines how the product is built. Where the two disagree, this document wins on scope and behavior, and `AGENTS.md` must be updated.
 
@@ -13,7 +13,7 @@ tinyAmbient v1 is a background ambient-noise player: one small executable per OS
 
 ## 1. Summary
 
-- One binary per OS, under 150 KB on Linux and under 300 KB on Windows.
+- One binary per OS, at most 150 KB on Linux and 300 KB on Windows.
 - Controlled by a CLI; a daemon keeps audio running between invocations.
 - Three noise types: white, pink, brown.
 - Persistent configuration in a plain INI file.
@@ -92,7 +92,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 
 ## 6. Functional requirements
 
-**FR-01 Playback control.** The CLI accepts `play`, `pause`, and `toggle`. Each applies to the running daemon with a 20 ms volume fade. Resulting state persists.
+**FR-01 Playback control.** The CLI accepts `play`, `pause`, and `toggle`. Each applies to the running daemon with a 20 ms volume fade. Resulting state is reported by `--status` and lasts for the life of the daemon.
 
 **FR-02 Noise generation.** Types `white`, `pink`, `brown`. Output is 48 kHz, float32, stereo interleaved. Measured slope over 40 Hz–12 kHz in third-octave bands: white 0 +/- 0.5 dB/oct, pink -3 +/- 0.5 dB/oct, brown -6 +/- 1.0 dB/oct. RMS target -18 dBFS +/- 0.5 dB. Peak stays within [-1.0, 1.0].
 
@@ -102,7 +102,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 
 **FR-05 Session auto-stop.** `--stop-after <minutes>` starts a countdown from the moment the command is applied. `--stop-after off` cancels it. At expiry, playback fades out over 20 s and pauses; the daemon stays alive. The timer bounds a work session; it is session state and is never written to configuration.
 
-**FR-06 Config persistence.** Every content command (`play`, `pause`, `toggle`, `noise`, `volume`, `mono`, `stereo`) applies to the daemon and writes configuration. Writes are atomic: temporary file in the target directory, `fsync`, `rename`. `--status`, `--render`, `--help`, and `--version` never write.
+**FR-06 Config persistence.** Commands that change a persisted setting (`noise`, `volume`, `mono`, `stereo`) apply to the daemon and write configuration. Playback commands (`play`, `pause`, `toggle`) and `stop-after` change session state only and never write. Writes are atomic: temporary file in the target directory, `fsync`, `rename`. `--status`, `--render`, `--help`, and `--version` never write.
 
 **FR-07 Single instance.** One daemon per user session. A second invocation forwards its command over IPC and exits. Linux: Unix socket at `$XDG_RUNTIME_DIR/tinyambient.sock`, mode `0600`. Windows: named pipe at `\\.\pipe\tinyambient-<sid>` restricted to the current user.
 
@@ -146,6 +146,7 @@ Commands
   volume <0-100>
   stop-after <minutes|off>
   status
+  quit
 
 Options
   --noise <type>
@@ -153,6 +154,7 @@ Options
   --play | --pause | --toggle
   --stop-after <minutes|off>
   --status
+  --quit
   --mono | --stereo
   --render <file> [--seconds N] [--seed N]
   --portable
@@ -267,7 +269,7 @@ M0–M7 constitute the Linux release. M8 closes v1.
 | D-03 | macOS out of v1 | Decided |
 | D-04 | v1 ships white, pink, brown only | Decided |
 | D-05 | No arguments starts the daemon and plays | Decided |
-| D-06 | Content commands persist automatically | Decided |
+| D-06 | Setting commands (`noise`, `volume`, `mono`, `stereo`) persist automatically; playback and timer changes are session state | Decided |
 | D-07 | Auto-stop expiry pauses; daemon stays alive | Decided |
 | D-08 | Volume 0 is silence with `playing=1` | Decided |
 | D-09 | `status` uses a fixed six-line `key=value` format | Decided |
@@ -284,14 +286,3 @@ M0–M7 constitute the Linux release. M8 closes v1.
 2. Whether the tray returns in v2, and on which platform first.
 3. Windows console subsystem for background starts (resolved at M8).
 4. Repository license, required before public release or outside contributions.
-
-## 15. Deviations from AGENTS.md
-
-The following `AGENTS.md` sections are now stale and require an update:
-
-- Section 2 and section 10: Windows is a v1 target; macOS is not.
-- Section 6 and section 9: autostart flags and integration are removed.
-- Section 6: `sleep_minutes` is no longer a config key.
-- Section 6 and section 8: the sleep timer is renamed `stop-after`.
-- Section 13: M8 is Windows parity, not a tray milestone.
-- Section 15: open questions 6, 7, and 8 are resolved or dropped by this document.

@@ -27,11 +27,11 @@ If the PRD and this file disagree, the PRD wins and this file is fixed in the sa
 ## 1. Hard constraints
 
 1. The audio callback does not allocate, block, log, or perform I/O.
-2. Parameters travel through integer atomics: `_Atomic int` for type and playing, `_Atomic int volume_milli` (avoids `_Atomic float`), `_Atomic uint64_t` for the stop-after deadline.
+2. Parameters cross the thread boundary through integer atomics: `_Atomic int` for type and playing, `_Atomic int volume_milli` (avoids `_Atomic float`). The stop-after deadline is main-thread state and needs no atomic.
 3. `core/` includes only `libc`, `libm`, and C11 headers (`stdint`, `stdbool`, `stddef`, `stdatomic`). No OS headers.
 4. Allowed external dependencies: libc/libm; ALSA and Pulse loaded with `dlopen`; a pinned, vendored miniaudio. Anything else needs written justification and a measured size delta.
 5. `miniaudio` is not upgraded without testing audio and measuring the binary.
-6. Binary size is checked every milestone (`ls -l`, `size`). Linux limit: **< 150 KB**. Windows limit: **<300kb**
+6. Binary size is checked every milestone (`ls -l`, `size`). Linux limit: **<= 150 KB**. Windows limit: **<= 300 KB**.
 7. No network sockets in any mode.
 8. `-Wall -Wextra -Wpedantic` produces zero warnings in own code.
 9. Documentation, comments, and commit messages are written in English.
@@ -86,7 +86,7 @@ typedef struct wn_engine wn_engine;
 
 wn_engine *wn_engine_create(const wn_config *cfg);
 void       wn_engine_destroy(wn_engine *e);
-void       wn_engine_command(wn_engine *e, const char *line);
+int        wn_engine_command(wn_engine *e, const char *line);
 void       wn_engine_render(wn_engine *e, float *out, unsigned frames);
 int        wn_engine_is_playing(const wn_engine *e);
 
