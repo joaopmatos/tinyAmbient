@@ -69,12 +69,24 @@ function(ta_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
     else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
+# ASan/UBSan cover own code only. ta_audio contains the miniaudio implementation
+# and is deliberately left uninstrumented (AGENTS.md 1.5, PRD NFR-05). Linking an
+# uninstrumented TU into an instrumented binary is supported; it just means that
+# code is not checked.
+function(ta_sanitize target)
+    if(NOT TA_SANITIZE)
+        return()
+    endif()
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /fsanitize=address)
+    else()
         target_compile_options(${target} PRIVATE
-            -Wall -Wextra -Wpedantic
-            $<$<BOOL:${TA_SANITIZE}>:-fsanitize=address,undefined>
-            $<$<BOOL:${TA_SANITIZE}>:-fno-omit-frame-pointer>)
-        target_link_options(${target} PRIVATE
-            $<$<BOOL:${TA_SANITIZE}>:-fsanitize=address,undefined>)
+            -fsanitize=address,undefined
+            -fno-omit-frame-pointer)
     endif()
 endfunction()
 
@@ -87,6 +99,7 @@ add_library(ta_core STATIC
     src/core/noise.c)
 target_include_directories(ta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 ta_warnings(ta_core)
+ta_sanitize(ta_core)
 ta_optimize(ta_core)
 
 add_library(ta_audio STATIC
@@ -110,7 +123,16 @@ add_executable(tinyambient
     src/main.c)
 target_link_libraries(tinyambient PRIVATE ta_core ta_audio)
 ta_warnings(tinyambient)
+ta_sanitize(tinyambient)
 ta_optimize(tinyambient)
+
+# Own code is instrumented; the binary still needs the sanitizer runtime at link
+# time. ta_audio stays out of the compile side, but not out of the link line.
+if(TA_SANITIZE AND NOT MSVC)
+    target_link_options(tinyambient PRIVATE -fsanitize=address,undefined)
+elseif(TA_SANITIZE AND MSVC)
+    target_link_options(tinyambient PRIVATE /fsanitize=address)
+endif()
 
 # --- Size measurement --------------------------------------------------------
 #
