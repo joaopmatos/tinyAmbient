@@ -6,8 +6,9 @@
 /* Owns the observable state (playing, type, volume) and the fades. This is the
  * only entry point the audio callback may call.
  *
- * Implementation lands in M6 (atomics, fades, auto-stop). The declarations are
- * fixed now so audio/ and platform/ can be written against them. */
+ * Implementation starts in M5 (create/command/render) and is completed in M6
+ * (atomics, fades, auto-stop). The declarations are fixed now so audio/ and
+ * platform/ can be written against them. */
 typedef struct wn_engine wn_engine;
 
 wn_engine *wn_engine_create(const wn_config *cfg);

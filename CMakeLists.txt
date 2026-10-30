@@ -104,9 +104,10 @@ ta_optimize(ta_core)
 
 add_library(ta_audio STATIC
     src/audio/device.c)
-target_include_directories(ta_audio
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
-    SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+target_include_directories(ta_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# SYSTEM must directly follow the target name: in any other position CMake
+# treats it as an include path named "SYSTEM".
+target_include_directories(ta_audio SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_link_libraries(ta_audio PUBLIC ta_core)
 ta_warnings(ta_audio)
 ta_optimize(ta_audio)

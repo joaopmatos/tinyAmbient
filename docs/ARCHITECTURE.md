@@ -73,17 +73,19 @@ typedef struct {
     int fade_ms;       /* 0..2000 */
 } wn_config;
 
-void wn_config_defaults(wn_config *cfg);
-int  wn_config_parse(const char *text, size_t len, wn_config *out,
-                     char *warn, size_t warn_cap);
-int  wn_config_format(const wn_config *cfg, const char *original,
-                      char *out, size_t cap);
+void   wn_config_defaults(wn_config *cfg);
+void   wn_config_parse(const char *text, size_t len, wn_config *out,
+                       char *warn, size_t warn_cap);
+size_t wn_config_format(const wn_config *cfg, const char *original,
+                        char *out, size_t cap);
 ```
 
 - Keys under `[general]`: `noise`, `volume`, `mono`, `fade_ms`.
 - Unknown keys survive a rewrite.
 - Malformed values fall back to defaults with a warning; they never abort startup.
 - `fade_ms` is clamped to 0-2000 on read.
+- `wn_config_format` uses `snprintf` semantics: it returns the byte count the
+  full text needs, so a value `>= cap` signals truncation.
 
 The atomic write (temp file + `fsync` + `rename`) lives in the layer that owns I/O, not here.
 

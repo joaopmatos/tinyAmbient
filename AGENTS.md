@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** greenfield. `README.md`, `.gitignore`, `docs/PRD.md`, `docs/ARCHITECTURE.md` exist. No code or build yet.
+**State:** M0 complete. CMake build, layer headers, size gate, and CI skeleton are in place. No DSP, audio device, IPC, or CLI behavior yet.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
