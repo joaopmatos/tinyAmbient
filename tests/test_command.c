@@ -158,6 +158,38 @@ static void test_noise_option(void)
     CHECK(parse(missing, cmds, err, sizeof(err)) == -1);
 }
 
+static void test_duplicate_options(void)
+{
+    static const char *const two_render[] = {"t",        "--render", "a",
+                                             "--render", "b",        NULL};
+    static const char *const two_seconds[] = {
+        "t", "--render", "a", "--seconds", "1", "--seconds", "2", NULL};
+    static const char *const two_seed[] = {"t", "--render", "a", "--seed",
+                                           "1", "--seed",   "2", NULL};
+    static const char *const two_noise[] = {
+        "t", "--render", "a", "--noise", "pink", "--noise", "brown", NULL};
+    wn_cmd cmds[WN_CMD_MAX];
+    char err[160] = "";
+
+    /* Silently keeping the last value would render the wrong file or the wrong
+     * length without telling anyone. */
+    CHECK(parse(two_render, cmds, err, sizeof(err)) == -1);
+    CHECK(parse(two_seconds, cmds, err, sizeof(err)) == -1);
+    CHECK(parse(two_seed, cmds, err, sizeof(err)) == -1);
+    CHECK(parse(two_noise, cmds, err, sizeof(err)) == -1);
+}
+
+static void test_terminator(void)
+{
+    static const char *const trailing[] = {"t", "--", "--bogus", NULL};
+    static const char *const bare_end[] = {"t", "--", NULL};
+    wn_cmd cmds[WN_CMD_MAX];
+    char err[160] = "";
+
+    CHECK(parse(trailing, cmds, err, sizeof(err)) == -1);
+    CHECK(parse(bare_end, cmds, err, sizeof(err)) == 0);
+}
+
 static void test_version_and_help(void)
 {
     static const char *const version[] = {"t", "--version", NULL};
@@ -190,6 +222,8 @@ int main(void)
     test_seed_bounds();
     test_unknown_arguments();
     test_noise_option();
+    test_duplicate_options();
+    test_terminator();
     test_version_and_help();
     test_no_arguments();
 

@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M3 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, parser, spectrum test. No audio device, no IPC, no daemon.
+**State:** M4 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, parser, spectrum and playback tests. No IPC, no daemon, no config file.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -139,7 +139,7 @@ Rules:
 ### Base flags (GCC/Clang)
 
 ```
--Os -flto -ffunction-sections -fdata-sections
+-Os -flto=auto -ffunction-sections -fdata-sections
 -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident
 -Wl,--gc-sections -s
 ```
@@ -187,6 +187,8 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | M1 | M0 + PCG32, white noise, `--render`, parser, tests | 11 KB | 150 KB |
 | M2 | M1 + pink and brown generators, `--noise`, `check_spectrum.py` | 11 KB | 150 KB |
 | M3 | M2 + WAV container and its header checks | 11 KB | 150 KB |
+| M4 | M3 + miniaudio device and callback (product binary, unreachable until M7) | 15 KB | 150 KB |
+| M4 | `play_check` harness, which actually opens the device | 91 KB | — |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
@@ -201,11 +203,20 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 - `third_party/` is never formatted. miniaudio is vendored verbatim.
 - Local use: `scripts/check-format.sh --write` to format, `scripts/check-format.sh` to verify.
 
+### Build options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `TA_SANITIZE` | `OFF` | ASan + UBSan on own code. `audio/` stays uninstrumented (AGENTS 1.5). |
+| `TA_REQUIRE_SPECTRUM` | `ON` | Fail configuration when Python3 is missing. A silently skipped FR-02 gate is worse than a missing one. |
+
 ### Per-OS notes
 
 - **Linux:** link dynamically against libc, load audio backends with `dlopen`. Do not attempt static musl plus ALSA.
 - **Windows:** `/MT` to avoid the VC++ Redistributable; `/O1 /GL /Gy /OPT:REF /OPT:ICF`.
-- **CI:** Ubuntu + Windows matrix. Linux installs `alsa-lib-devel`/`libasound2-dev` and `libpulse-dev`. No audio device in CI: offline render only.
+- **CI:** Ubuntu + Windows matrix, plus a third job that builds with ASan and UBSan (`-DTA_SANITIZE=ON`). Linux installs `alsa-lib-devel`/`libasound2-dev` and `libpulse-dev`. No runner has an audio device, so `audio/` is exercised through miniaudio's null backend (`TINYAMBIENT_AUDIO=null`) and everything else through offline renders.
+
+- **Sanitizers locally:** Fedora ships the sanitizer runtimes separately. `sudo dnf install libasan libubsan`, then configure with `-DTA_SANITIZE=ON`. Without those packages the build links but the binary cannot run.
 
 ---
 

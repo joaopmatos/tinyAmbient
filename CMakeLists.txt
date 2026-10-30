@@ -34,6 +34,9 @@ endif()
 # put every function and variable in its own section; --gc-sections then drops
 # the ones nothing references. Without that pair, linking miniaudio would pull
 # in the whole backends list even though v1 only calls the playback path.
+#
+# -flto=auto instead of plain -flto: same optimisation, but GCC parallelises the
+# LTRANS jobs and stops emitting "using serial compilation" on every link.
 
 function(ta_optimize target)
     if(MSVC)
@@ -50,7 +53,7 @@ function(ta_optimize target)
     else()
         target_compile_options(${target} PRIVATE
             $<$<CONFIG:Release>:-Os>
-            $<$<CONFIG:Release>:-flto>
+            $<$<CONFIG:Release>:-flto=auto>
             $<$<CONFIG:Release>:-ffunction-sections>
             $<$<CONFIG:Release>:-fdata-sections>
             $<$<CONFIG:Release>:-fno-asynchronous-unwind-tables>
@@ -59,7 +62,7 @@ function(ta_optimize target)
             $<$<CONFIG:Debug>:-O0>
             $<$<CONFIG:Debug>:-g>)
         target_link_options(${target} PRIVATE
-            $<$<CONFIG:Release>:-flto>
+            $<$<CONFIG:Release>:-flto=auto>
             $<$<CONFIG:Release>:-Wl,--gc-sections>
             $<$<CONFIG:Release>:-s>)
     endif()
@@ -192,6 +195,20 @@ endfunction()
 ta_add_test(test_noise tests/test_noise.c)
 ta_add_test(test_command tests/test_command.c)
 
+# Audio device path. The null backend drives the callback in real time without
+# hardware, so this runs in CI; it is the only automated coverage of audio/.
+add_executable(play_check tests/play_check.c)
+target_include_directories(play_check SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+target_link_libraries(play_check PRIVATE ta_audio)
+ta_warnings(play_check)
+ta_sanitize(play_check)
+ta_optimize(play_check)
+if(TA_SANITIZE AND NOT MSVC)
+    target_link_options(play_check PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME playback COMMAND play_check 600)
+set_tests_properties(playback PROPERTIES ENVIRONMENT "TINYAMBIENT_AUDIO=null")
+
 # End-to-end render checks: byte count and determinism (PRD FR-10, NFR-06).
 add_test(NAME render
     COMMAND ${CMAKE_COMMAND}
@@ -199,8 +216,19 @@ add_test(NAME render
         -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render_check.cmake)
 
-# Spectrum and RMS gate for every noise type (PRD FR-02). Skipped when no
-# Python interpreter is available, with a message rather than a false pass.
+# Exit codes and the diagnostic prefix (PRD FR-14).
+add_test(NAME cli
+    COMMAND ${CMAKE_COMMAND}
+        -DBINARY=$<TARGET_FILE:tinyambient>
+        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)
+
+# Spectrum and RMS gate for every noise type (PRD FR-02). Python is optional to
+# build but required to verify the product, so a missing interpreter is a
+# configuration error unless explicitly waived: a silently skipped gate is worse
+# than no gate.
+option(TA_REQUIRE_SPECTRUM "Fail configure when Python3 is missing" ON)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_test(NAME spectrum
@@ -210,6 +238,10 @@ if(Python3_Interpreter_FOUND)
             -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_spectrum.py
             -DPYTHON=${Python3_EXECUTABLE}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/spectrum_check.cmake)
+elseif(TA_REQUIRE_SPECTRUM)
+    message(FATAL_ERROR
+        "Python3 is required for the FR-02 spectrum test. Install python3, or "
+        "configure with -DTA_REQUIRE_SPECTRUM=OFF to skip it deliberately.")
 else()
-    message(STATUS "Python3 not found: the spectrum test is disabled")
+    message(WARNING "Python3 not found: the spectrum test is disabled")
 endif()

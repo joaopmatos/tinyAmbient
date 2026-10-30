@@ -27,4 +27,8 @@ void wn_engine_render(wn_engine *e, float *out, unsigned frames);
 
 int wn_engine_is_playing(const wn_engine *e);
 
+/* Diagnostics: frames produced since the engine was created. Read by the
+ * playback test to prove the audio callback actually ran. */
+unsigned long wn_engine_frames_rendered(const wn_engine *e);
+
 #endif /* WN_CORE_ENGINE_H */

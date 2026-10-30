@@ -171,12 +171,15 @@ stay bit-identical (FR-13).
 The only file that includes `miniaudio.h` with `MINIAUDIO_IMPLEMENTATION`.
 
 - `ma_device` with `f32`, 2 channels, 48 kHz (`ma_device_config_init(ma_device_type_playback)`).
-- Period of 512-1024 frames.
+- Period of 512 frames.
 - Callback: `ma_device *` to `wn_engine *` via `pUserData`; calls `wn_engine_render` and returns.
 - No allocation, locks, logging, or syscalls inside the callback.
-- The notification callback (device stopped or removed) only sets `_Atomic int restart_requested`; the main thread observes it and reinitializes.
-- Backoff: 100 ms, 500 ms, 2 s, then 5 s.
-- Parameters and `playing` survive a restart; resuming must not click.
+- The device and the forced context are static, never heap-allocated: a fixed address cannot be freed under a running callback.
+- `notificationCallback` runs on a miniaudio-owned thread and only stores `_Atomic int restart_requested`, for `stopped`, `rerouted`, and `interruption_began`. A `stopping` guard keeps our own `ma_device_uninit` from arming it.
+- `wn_audio_needs_restart` exposes the flag. The backoff loop (100 ms, 500 ms, 2 s, then every 5 s) belongs to `platform/` and lands in M7, because that is where the main loop is.
+- Parameters and `playing` survive a restart; resuming must not click (fades land in M6).
+- At M4 nothing in the shipped binary calls `wn_audio_start`, so `--gc-sections` still removes miniaudio entirely. `tests/play_check.c` is the harness that exercises the path, and the size it reports (about 86 KB of `.text`) is the real cost the binary will carry once M7 gives the device a caller.
+- `TINYAMBIENT_AUDIO=null` forces miniaudio's null backend, which drives the callback in real time without hardware. CI sets it, so the audio path has automated coverage; it also separates a device fault from a DSP fault when debugging.
 
 ---
 

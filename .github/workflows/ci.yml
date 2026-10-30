@@ -63,3 +63,29 @@ jobs:
 
       - name: Check formatting
         run: scripts/check-format.sh
+
+  sanitize:
+    name: ASan/UBSan
+    runs-on: ubuntu-24.04
+    env:
+      # miniaudio is not instrumented, but every allocation it makes is still
+      # tracked, so definite leaks are reported even from the device path.
+      ASAN_OPTIONS: detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build libasan8 libubsan1
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DTA_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

@@ -211,7 +211,9 @@ float wn_noise_next(wn_noise *n)
 float wn_noise_gain_for(int type)
 {
     if (type < 0 || type >= WN_NOISE_COUNT) {
-        return 1.0f;
+        /* Silence, not full scale: an invalid type is a bug, and a bug should
+         * not produce the loudest possible output. */
+        return 0.0f;
     }
     return noise_gain[type];
 }

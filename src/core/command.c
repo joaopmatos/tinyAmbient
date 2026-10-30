@@ -67,6 +67,10 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                       char *err, size_t err_cap)
 {
     int count = 0;
+    int seen_render = 0;
+    int seen_noise = 0;
+    int seen_seconds = 0;
+    int seen_seed = 0;
     int i;
 
     if (out == NULL || cap <= 0) {
@@ -93,7 +97,13 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
         }
 
         if (arg[2] == '\0') {
-            /* Bare "--" ends option parsing; there is nothing after it yet. */
+            /* Bare "--" ends option parsing. v1 has no positional arguments, so
+             * anything after it is an error rather than silently ignored. */
+            if (i + 1 < argc) {
+                set_error(err, err_cap, "unexpected argument '%s'",
+                          argv[i + 1]);
+                return -1;
+            }
             break;
         }
 
@@ -102,6 +112,12 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                 set_error(err, err_cap, "option '--render' requires a path");
                 return -1;
             }
+            if (seen_render) {
+                set_error(err, err_cap,
+                          "option '--render' given more than once");
+                return -1;
+            }
+            seen_render = 1;
             i++;
             if (emit(out, cap, &count, WN_CMD_RENDER, 0, argv[i], err,
                      err_cap) != 0) {
@@ -114,6 +130,11 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                 set_error(err, err_cap, "option '--noise' requires a value");
                 return -1;
             }
+            if (seen_noise) {
+                set_error(err, err_cap,
+                          "option '--noise' given more than once");
+                return -1;
+            }
             i++;
             type = wn_noise_type_parse(argv[i]);
             if (type == WN_NOISE_NONE) {
@@ -122,6 +143,7 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                           argv[i]);
                 return -1;
             }
+            seen_noise = 1;
             if (emit(out, cap, &count, WN_CMD_NOISE, type,
                      wn_noise_type_name(type), err, err_cap) != 0) {
                 return -1;
@@ -132,6 +154,11 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                 set_error(err, err_cap, "option '--seconds' requires a value");
                 return -1;
             }
+            if (seen_seconds) {
+                set_error(err, err_cap,
+                          "option '--seconds' given more than once");
+                return -1;
+            }
             i++;
             if (parse_int(argv[i], WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX,
                           &value) != 0) {
@@ -140,6 +167,7 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                     argv[i], WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX);
                 return -1;
             }
+            seen_seconds = 1;
             if (emit(out, cap, &count, WN_CMD_SECONDS, value, NULL, err,
                      err_cap) != 0) {
                 return -1;
@@ -148,6 +176,10 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
             int value;
             if (i + 1 >= argc) {
                 set_error(err, err_cap, "option '--seed' requires a value");
+                return -1;
+            }
+            if (seen_seed) {
+                set_error(err, err_cap, "option '--seed' given more than once");
                 return -1;
             }
             i++;
@@ -161,6 +193,7 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                      err_cap) != 0) {
                 return -1;
             }
+            seen_seed = 1;
         } else if (arg_is(arg, "--version")) {
             if (emit(out, cap, &count, WN_CMD_VERSION, 0, NULL, err, err_cap) !=
                 0) {
