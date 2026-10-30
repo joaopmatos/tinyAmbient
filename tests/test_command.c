@@ -132,6 +132,32 @@ static void test_unknown_arguments(void)
     CHECK(parse(bad_word, cmds, err, sizeof(err)) == -1);
 }
 
+static void test_noise_option(void)
+{
+    static const char *const ok_pink[] = {"t",       "--render", "a",
+                                          "--noise", "pink",     NULL};
+    static const char *const ok_upper[] = {"t",       "--render", "a",
+                                           "--noise", "BROWN",    NULL};
+    static const char *const bad_type[] = {"t",       "--render", "a",
+                                           "--noise", "gray",     NULL};
+    static const char *const missing[] = {"t", "--render", "a", "--noise",
+                                          NULL};
+    wn_cmd cmds[WN_CMD_MAX];
+    char err[160] = "";
+
+    CHECK(parse(ok_pink, cmds, err, sizeof(err)) == 2);
+    CHECK(cmds[1].kind == WN_CMD_NOISE);
+    CHECK(cmds[1].ivalue == 1);
+    CHECK(strcmp(cmds[1].svalue, "pink") == 0);
+
+    CHECK(parse(ok_upper, cmds, err, sizeof(err)) == 2);
+    CHECK(cmds[1].ivalue == 2);
+
+    CHECK(parse(bad_type, cmds, err, sizeof(err)) == -1);
+    CHECK(err[0] != '\0');
+    CHECK(parse(missing, cmds, err, sizeof(err)) == -1);
+}
+
 static void test_version_and_help(void)
 {
     static const char *const version[] = {"t", "--version", NULL};
@@ -163,6 +189,7 @@ int main(void)
     test_seconds_bounds();
     test_seed_bounds();
     test_unknown_arguments();
+    test_noise_option();
     test_version_and_help();
     test_no_arguments();
 

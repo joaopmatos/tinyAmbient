@@ -25,6 +25,9 @@ typedef struct {
     uint64_t state;
     uint64_t inc;
     int type;
+    float pink_b[7];  /* Paul Kellet, 7 poles */
+    float brown;      /* leaky integrator */
+    float dc_x, dc_y; /* DC blocker */
 } wn_noise;
 
 /* Static name in lowercase, or NULL for an out-of-range value. */

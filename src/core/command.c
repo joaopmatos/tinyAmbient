@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/noise.h"
+
 static int arg_is(const char *arg, const char *flag)
 {
     return strcmp(arg, flag) == 0;
@@ -103,6 +105,25 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
             i++;
             if (emit(out, cap, &count, WN_CMD_RENDER, 0, argv[i], err,
                      err_cap) != 0) {
+                return -1;
+            }
+        } else if (arg_is(arg, "--noise")) {
+            int type;
+
+            if (i + 1 >= argc) {
+                set_error(err, err_cap, "option '--noise' requires a value");
+                return -1;
+            }
+            i++;
+            type = wn_noise_type_parse(argv[i]);
+            if (type == WN_NOISE_NONE) {
+                set_error(err, err_cap,
+                          "'%s' is not a noise type (white, pink, brown)",
+                          argv[i]);
+                return -1;
+            }
+            if (emit(out, cap, &count, WN_CMD_NOISE, type,
+                     wn_noise_type_name(type), err, err_cap) != 0) {
                 return -1;
             }
         } else if (arg_is(arg, "--seconds")) {

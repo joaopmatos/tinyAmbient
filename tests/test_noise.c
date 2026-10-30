@@ -144,6 +144,103 @@ static void test_mean_is_zero(void)
     CHECK(mean < 0.002);
 }
 
+/* Every type, after the calibrated gain, must stay inside [-1, 1) so the soft
+ * clip never engages. Pink and brown have much larger raw amplitude than white,
+ * so this is where a wrong gain constant shows up. */
+static void test_all_types_in_range(void)
+{
+    int type;
+
+    for (type = 0; type < WN_NOISE_COUNT; type++) {
+        wn_noise n;
+        float gain = wn_noise_gain_for(type);
+        int i;
+
+        wn_noise_init(&n, type, 3u, 0u);
+
+        for (i = 0; i < 200000; i++) {
+            float s = wn_noise_next(&n) * gain;
+
+            if (!(s >= -1.0f && s < 1.0f)) {
+                CHECK(s >= -1.0f && s < 1.0f);
+                return;
+            }
+        }
+    }
+}
+
+/* Filters carry state, so determinism has to hold with the state in the loop,
+ * not just for the raw RNG. */
+static void test_all_types_deterministic(void)
+{
+    int type;
+
+    for (type = 0; type < WN_NOISE_COUNT; type++) {
+        wn_noise a;
+        wn_noise b;
+        int i;
+
+        wn_noise_init(&a, type, 77u, 0u);
+        wn_noise_init(&b, type, 77u, 0u);
+
+        for (i = 0; i < SAMPLE_COUNT; i++) {
+            float sa = wn_noise_next(&a);
+            float sb = wn_noise_next(&b);
+
+            if (sa != sb) {
+                CHECK(sa == sb);
+                return;
+            }
+        }
+    }
+}
+
+static void test_types_differ(void)
+{
+    wn_noise white;
+    wn_noise pink;
+    wn_noise brown;
+    int i;
+    int white_vs_pink = 0;
+    int white_vs_brown = 0;
+
+    wn_noise_init(&white, WN_NOISE_WHITE, 5u, 0u);
+    wn_noise_init(&pink, WN_NOISE_PINK, 5u, 0u);
+    wn_noise_init(&brown, WN_NOISE_BROWN, 5u, 0u);
+
+    for (i = 0; i < SAMPLE_COUNT; i++) {
+        float w = wn_noise_next(&white);
+
+        if (w != wn_noise_next(&pink)) {
+            white_vs_pink = 1;
+        }
+        if (w != wn_noise_next(&brown)) {
+            white_vs_brown = 1;
+        }
+    }
+
+    CHECK(white_vs_pink);
+    CHECK(white_vs_brown);
+}
+
+/* The leaky integrator alone drifts; the DC blocker must keep the mean near
+ * zero relative to the ~13 RMS of the raw brown signal. */
+static void test_brown_has_no_dc(void)
+{
+    wn_noise n;
+    double sum = 0.0;
+    int i;
+    const int count = 1000000;
+
+    wn_noise_init(&n, WN_NOISE_BROWN, 5u, 0u);
+
+    for (i = 0; i < count; i++) {
+        sum += (double)wn_noise_next(&n);
+    }
+
+    CHECK(fabs(sum / (double)count) < 0.1);
+}
+
 static void test_type_names(void)
 {
     CHECK(strcmp(wn_noise_type_name(WN_NOISE_WHITE), "white") == 0);
@@ -166,6 +263,10 @@ int main(void)
     test_range();
     test_rms();
     test_mean_is_zero();
+    test_all_types_in_range();
+    test_all_types_deterministic();
+    test_types_differ();
+    test_brown_has_no_dc();
     test_type_names();
 
     if (failures != 0) {

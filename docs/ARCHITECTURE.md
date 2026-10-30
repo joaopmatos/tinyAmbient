@@ -95,15 +95,17 @@ The atomic write (temp file + `fsync` + `rename`) lives in the layer that owns I
 
 ```c
 typedef struct {
-    uint64_t state;        /* PCG32 state */
-    uint64_t inc;          /* PCG32 stream; must be odd */
+    uint64_t state;         /* PCG32 state */
+    uint64_t inc;           /* PCG32 stream; must be odd */
     int      type;
-    /* filter state for pink/brown lands in M2 */
+    float    pink_b[7];     /* Paul Kellet, 7 poles */
+    float    brown;         /* leaky integrator */
+    float    dc_x, dc_y;    /* DC blocker */
 } wn_noise;
 
 void  wn_noise_init(wn_noise *n, int type, uint64_t seed, uint64_t stream);
 void  wn_noise_set_type(wn_noise *n, int type);   /* resets filters, keeps RNG */
-float wn_noise_next(wn_noise *n);                 /* one sample in [-1, 1) */
+float wn_noise_next(wn_noise *n);                 /* one sample */
 float wn_noise_gain_for(int type);                /* calibrated, fixed table */
 ```
 
@@ -116,9 +118,21 @@ float wn_noise_gain_for(int type);                /* calibrated, fixed table */
   distribution has no rounding bias.
 - Pink: Paul Kellet, 7 poles.
 - Brown: leaky integrator (`a ~= 0.9995`) followed by a DC blocker. A higher leak flattens the slope (-4.87 dB/oct in the PoC); do not repeat that.
-- Gains come from a table calibrated with `check_spectrum.py`, not from invented constants. White is analytic: RMS of a uniform distribution is `1/sqrt(3)`, and -18 dBFS is `10^(-18/20)`, so the gain is `0.218052`.
+- Gains come from a table calibrated with `check_spectrum.py`, not from invented constants. White is analytic: RMS of a uniform distribution is `1/sqrt(3)`, and -18 dBFS is `10^(-18/20)`, so the gain is `0.218052`. Pink and brown are measured over 10M samples on both streams: `0.071424` and `0.009741`. The C test `test_noise` proves the analytic value matches the ensemble measurement to five digits, which is the sanity check on the method.
+- Brown's energy sits near DC, so any window shorter than about a minute lands within roughly +/-0.3 dB of the target. That is a property of `1/f^2` noise, not a calibration error; the spectrum test uses 20 s renders for that reason.
 - `wn_noise_next` does not change `type` itself: the engine orchestrates type changes so it can crossfade.
 - No `sin`/`exp`/`log` per sample.
+- Filter state resets on a type change while the RNG state is preserved, so switching type never rewinds the sequence.
+
+### Measuring the slope
+
+`tests/check_spectrum.py` Welch-averages a Hann-windowed FFT, sums power into
+third-octave bands, and fits band level in dB against `log2(frequency)`.
+
+Band levels must be **power spectral density** (power divided by band width).
+A third-octave band's width is proportional to its center frequency, so summing
+raw band power reports +3 dB/oct for flat white noise. Dividing by the width is
+what makes the PRD targets 0, -3, and -6 dB/oct rather than 3, 0, and -3.
 
 ---
 

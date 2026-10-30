@@ -29,6 +29,7 @@ void wn_cli_usage(void)
           "\n"
           "render:\n"
           "  --render <file>      offline 48 kHz stereo float32\n"
+          "  --noise <type>       white, pink, or brown; default white\n"
           "  --seconds <1-3600>   render length, default "
           "10\n"
           "  --seed <n>           generator seed, default 1\n"
@@ -74,7 +75,8 @@ static int has_wav_extension(const char *path)
     return ascii_equal_ci(path + len - 4, ".wav");
 }
 
-static int render_file(const char *path, int seconds, uint64_t seed)
+static int render_file(const char *path, int seconds, uint64_t seed,
+                       int noise_type)
 {
     wn_config cfg;
     wn_engine *engine;
@@ -89,9 +91,9 @@ static int render_file(const char *path, int seconds, uint64_t seed)
         return WN_EXIT_RUNTIME;
     }
 
-    /* Render uses full scale. There is no --volume at M1, and the calibrated
+    /* Render uses full scale. There is no --volume at M2, and the calibrated
      * type gain already targets -18 dBFS. */
-    cfg.noise = WN_NOISE_WHITE;
+    cfg.noise = noise_type;
     cfg.volume = 100;
     cfg.mono = 0;
     cfg.fade_ms = 0;
@@ -141,6 +143,7 @@ int wn_cli_main(int argc, const char *const *argv)
     const char *render_path = NULL;
     int seconds = WN_RENDER_SECONDS_DEFAULT;
     int seed = WN_RENDER_SEED_DEFAULT;
+    int noise_type = WN_NOISE_WHITE;
     int have_render = 0;
     int have_render_option = 0;
     int want_help = 0;
@@ -159,6 +162,10 @@ int wn_cli_main(int argc, const char *const *argv)
             case WN_CMD_RENDER:
                 render_path = cmds[i].svalue;
                 have_render = 1;
+                break;
+            case WN_CMD_NOISE:
+                noise_type = cmds[i].ivalue;
+                have_render_option = 1;
                 break;
             case WN_CMD_SECONDS:
                 seconds = cmds[i].ivalue;
@@ -195,7 +202,7 @@ int wn_cli_main(int argc, const char *const *argv)
             wn_cmd_kind kind = cmds[i].kind;
 
             if (kind != WN_CMD_RENDER && kind != WN_CMD_SECONDS &&
-                kind != WN_CMD_SEED) {
+                kind != WN_CMD_SEED && kind != WN_CMD_NOISE) {
                 wn_cli_error("--render cannot be combined with other commands");
                 return WN_EXIT_USAGE;
             }
@@ -208,11 +215,11 @@ int wn_cli_main(int argc, const char *const *argv)
             return WN_EXIT_RUNTIME;
         }
 
-        return render_file(render_path, seconds, (uint64_t)seed);
+        return render_file(render_path, seconds, (uint64_t)seed, noise_type);
     }
 
     if (have_render_option) {
-        wn_cli_error("--seconds and --seed require --render");
+        wn_cli_error("--noise, --seconds and --seed require --render");
         return WN_EXIT_USAGE;
     }
 

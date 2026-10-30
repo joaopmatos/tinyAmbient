@@ -198,3 +198,18 @@ add_test(NAME render
         -DBINARY=$<TARGET_FILE:tinyambient>
         -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render_check.cmake)
+
+# Spectrum and RMS gate for every noise type (PRD FR-02). Skipped when no
+# Python interpreter is available, with a message rather than a false pass.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME spectrum
+        COMMAND ${CMAKE_COMMAND}
+            -DBINARY=$<TARGET_FILE:tinyambient>
+            -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_spectrum.py
+            -DPYTHON=${Python3_EXECUTABLE}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/spectrum_check.cmake)
+else()
+    message(STATUS "Python3 not found: the spectrum test is disabled")
+endif()

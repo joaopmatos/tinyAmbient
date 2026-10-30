@@ -13,15 +13,23 @@ static const char *const noise_names[WN_NOISE_COUNT] = {
 
 /* Gains calibrated to -18 dBFS RMS, never by ear.
  *
- * -18 dBFS is an RMS of 10^(-18/20) = 0.125892. White noise uniform on [-1,1)
- * has RMS 1/sqrt(3) = 0.577350, so the gain is 0.125892 / 0.577350 = 0.218052.
+ * -18 dBFS is an RMS of 10^(-18/20) = 0.125892.
  *
- * Pink and brown land in M2. Their rows stay at zero until check_spectrum.py
- * has measured them, so a wrong gain cannot ship silently. */
+ * White is analytic: noise uniform on [-1,1) has RMS 1/sqrt(3) = 0.577350, so
+ * the gain is 0.125892 / 0.577350 = 0.218052. The ensemble measurement below
+ * reports 0.218045, which confirms the derivation.
+ *
+ * Pink and brown are measured over 10M samples per stream, across both streams,
+ * because the filter output level depends on the pole placement and cannot be
+ * derived in closed form. check_spectrum.py reproduces the numbers.
+ *
+ * Brown has most of its energy near DC, so any window shorter than a minute
+ * lands within about +/-0.3 dB of the target rather than on it. That is a
+ * property of 1/f^2 noise, not a calibration error. */
 static const float noise_gain[WN_NOISE_COUNT] = {
-    0.218052f, /* white */
-    0.0f,      /* pink,  M2 */
-    0.0f,      /* brown, M2 */
+    0.218052f, /* white: analytic, 0.125892 / (1/sqrt(3)) */
+    0.071424f, /* pink:  measured, 0.125892 / 1.762616 */
+    0.009741f, /* brown: measured, 0.125892 / 12.923549 */
 };
 
 const char *wn_noise_type_name(int type)
@@ -104,34 +112,99 @@ void wn_noise_init(wn_noise *n, int type, uint64_t seed, uint64_t stream)
 
 void wn_noise_set_type(wn_noise *n, int type)
 {
+    int b;
+
     if (n == NULL) {
         return;
     }
     n->type = type;
-    /* Filter state resets land here in M2. The RNG state is deliberately kept:
-     * switching type must not rewind the sequence. */
+
+    /* Filters restart on a type change; the RNG state is deliberately kept, so
+     * switching type does not rewind the sequence. */
+    for (b = 0; b < 7; b++) {
+        n->pink_b[b] = 0.0f;
+    }
+    n->brown = 0.0f;
+    n->dc_x = 0.0f;
+    n->dc_y = 0.0f;
+}
+
+/* Uniform on [-1, 1). 24 bits is exactly the float32 significand width, so
+ * every step is exact and the output has no rounding bias. */
+static float white_unit(wn_noise *n)
+{
+    uint32_t x = pcg32_next(n);
+    float f = (float)(x >> 8);
+
+    f = f * (1.0f / 8388608.0f);
+    return f - 1.0f;
+}
+
+/* Paul Kellet's 7-pole pink filter: a bank of one-pole sections whose summed
+ * response approximates -3 dB/octave across the audio band. It is a set of
+ * constants fitted to that slope, not a derived design, which is why the gain
+ * is measured rather than computed. */
+static float pink_step(wn_noise *n, float w)
+{
+    float pink;
+
+    n->pink_b[0] = 0.99886f * n->pink_b[0] + 0.0555179f * w;
+    n->pink_b[1] = 0.99332f * n->pink_b[1] + 0.0750759f * w;
+    n->pink_b[2] = 0.96900f * n->pink_b[2] + 0.1538520f * w;
+    n->pink_b[3] = 0.86650f * n->pink_b[3] + 0.3104856f * w;
+    n->pink_b[4] = 0.55000f * n->pink_b[4] + 0.5329522f * w;
+    n->pink_b[5] = -0.7616f * n->pink_b[5] - 0.0168980f * w;
+
+    pink = n->pink_b[0] + n->pink_b[1] + n->pink_b[2] + n->pink_b[3] +
+           n->pink_b[4] + n->pink_b[5] + n->pink_b[6] + 0.5362f * w;
+
+    n->pink_b[6] = 0.115926f * w;
+
+    return pink;
+}
+
+/* Leaky integrator followed by a DC blocker.
+ *
+ * The integrator alone has infinite gain at DC, so the output would walk away.
+ * The leak (a = 0.9995) puts the -3 dB corner near 3.8 Hz, well below the 40 Hz
+ * band the spectrum test starts at, and the DC blocker removes the residual
+ * offset. A larger leak flattens the slope toward -4.9 dB/oct; keep 0.9995. */
+#define BROWN_LEAK 0.9995f
+#define DC_BLOCK_R 0.9995f
+
+static float brown_step(wn_noise *n, float w)
+{
+    float x;
+    float y;
+
+    n->brown = BROWN_LEAK * n->brown + w;
+
+    x = n->brown;
+    y = x - n->dc_x + DC_BLOCK_R * n->dc_y;
+    n->dc_x = x;
+    n->dc_y = y;
+
+    return y;
 }
 
 float wn_noise_next(wn_noise *n)
 {
-    uint32_t x;
-    float f;
+    float w;
 
     if (n == NULL) {
         return 0.0f;
     }
 
-    x = pcg32_next(n);
+    w = white_unit(n);
 
     switch (n->type) {
+        case WN_NOISE_PINK:
+            return pink_step(n, w);
+        case WN_NOISE_BROWN:
+            return brown_step(n, w);
         case WN_NOISE_WHITE:
         default:
-            /* 24 bits, which is exactly the float32 significand width, so every
-             * step below is exact: no rounding, and the result is uniform on a
-             * 2^24-point grid over [-1, 1). */
-            f = (float)(x >> 8);
-            f = f * (1.0f / 8388608.0f);
-            return f - 1.0f;
+            return w;
     }
 }
 

@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M1 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32 + white noise, `--render` to raw float32, parser and tests. No pink/brown, no WAV, no audio device, no IPC, no daemon.
+**State:** M2 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32, parser, spectrum test. No WAV, no audio device, no IPC, no daemon.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -185,6 +185,9 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 |---|---|---|---|
 | M0 | Linux, GCC 16.2.1, `-Os -flto -s`, miniaudio compiled but unreferenced | 10 KB | 150 KB |
 | M1 | M0 + PCG32, white noise, `--render`, parser, tests | 11 KB | 150 KB |
+| M2 | M1 + pink and brown generators, `--noise`, `check_spectrum.py` | 11 KB | 150 KB |
+
+M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
