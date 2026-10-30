@@ -4,7 +4,11 @@
 #include <stddef.h>
 
 /* Single parser for argv and IPC lines. Knows nothing about sockets, files, or
- * stdout. Bare words and long flags are equivalent. */
+ * stdout. Bare words and long flags are equivalent.
+ *
+ * M1 recognizes --render, --seconds, --seed, --version, --help. The remaining
+ * kinds are declared now because the enum is the parser's contract, but they
+ * are rejected as unknown until their flag lands. */
 typedef enum {
     WN_CMD_NONE = 0,
     WN_CMD_PLAY,
@@ -17,6 +21,8 @@ typedef enum {
     WN_CMD_STEREO,
     WN_CMD_STATUS,
     WN_CMD_RENDER,
+    WN_CMD_SECONDS,
+    WN_CMD_SEED,
     WN_CMD_PORTABLE,
     WN_CMD_FOREGROUND,
     WN_CMD_VERSION,
@@ -26,7 +32,7 @@ typedef enum {
 
 typedef struct {
     wn_cmd_kind kind;
-    int ivalue;         /* volume, minutes, seed, seconds */
+    int ivalue;         /* volume, minutes, seconds, seed */
     const char *svalue; /* noise type, render path */
 } wn_cmd;
 
@@ -35,12 +41,19 @@ typedef struct {
 /* Maximum length of one IPC line, including the newline. */
 #define WN_LINE_MAX 256
 
+/* Defaults for the render options, applied by the caller when the flag is
+ * absent (PRD FR-10). */
+#define WN_RENDER_SECONDS_DEFAULT 10
+#define WN_RENDER_SEED_DEFAULT 1
+#define WN_RENDER_SECONDS_MIN 1
+#define WN_RENDER_SECONDS_MAX 3600
+
 /* Parses one argv-style token list. Returns the number of commands written to
  * `out`, or -1 on a usage error with a message in `err`. */
 int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                       char *err, size_t err_cap);
 
-/* Parses one newline-terminated IPC line without the terminator. */
+/* Parses one newline-terminated IPC line without the terminator. Lands in M7. */
 int wn_cmd_parse_line(const char *line, wn_cmd *out, int cap, char *err,
                       size_t err_cap);
 

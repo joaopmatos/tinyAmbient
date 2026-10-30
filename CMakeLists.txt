@@ -96,11 +96,27 @@ endfunction()
 # libc/libm, and only platform/ may call OS APIs.
 
 add_library(ta_core STATIC
-    src/core/noise.c)
+    src/core/noise.c
+    src/core/engine.c
+    src/core/command.c)
 target_include_directories(ta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 ta_warnings(ta_core)
 ta_sanitize(ta_core)
 ta_optimize(ta_core)
+
+# libm is allowed in core/ (AGENTS.md 1.3) and is needed once filters and the
+# gain calibration land.
+if(UNIX)
+    target_link_libraries(ta_core PUBLIC m)
+endif()
+
+add_library(ta_ui STATIC
+    src/ui/cli.c)
+target_link_libraries(ta_ui PUBLIC ta_core)
+target_compile_definitions(ta_ui PRIVATE TA_VERSION="${PROJECT_VERSION}")
+ta_warnings(ta_ui)
+ta_sanitize(ta_ui)
+ta_optimize(ta_ui)
 
 add_library(ta_audio STATIC
     src/audio/device.c)
@@ -122,7 +138,7 @@ endif()
 
 add_executable(tinyambient
     src/main.c)
-target_link_libraries(tinyambient PRIVATE ta_core ta_audio)
+target_link_libraries(tinyambient PRIVATE ta_ui ta_core ta_audio)
 ta_warnings(tinyambient)
 ta_sanitize(tinyambient)
 ta_optimize(tinyambient)
@@ -158,3 +174,27 @@ add_test(NAME size
         -DBINARY=$<TARGET_FILE:tinyambient>
         -DLIMIT_KB=${TA_SIZE_LIMIT_KB}
         -P ${TA_SIZE_SCRIPT})
+
+# --- Unit tests --------------------------------------------------------------
+
+function(ta_add_test name source)
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE ta_core)
+    ta_warnings(${name})
+    ta_sanitize(${name})
+    ta_optimize(${name})
+    if(TA_SANITIZE AND NOT MSVC)
+        target_link_options(${name} PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+ta_add_test(test_noise tests/test_noise.c)
+ta_add_test(test_command tests/test_command.c)
+
+# End-to-end render checks: byte count and determinism (PRD FR-10, NFR-06).
+add_test(NAME render
+    COMMAND ${CMAKE_COMMAND}
+        -DBINARY=$<TARGET_FILE:tinyambient>
+        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render_check.cmake)

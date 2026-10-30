@@ -95,25 +95,29 @@ The atomic write (temp file + `fsync` + `rename`) lives in the layer that owns I
 
 ```c
 typedef struct {
-    uint64_t rng;          /* PCG32, one per channel */
+    uint64_t state;        /* PCG32 state */
+    uint64_t inc;          /* PCG32 stream; must be odd */
     int      type;
-    float    b[7];         /* Kellet, pink */
-    float    brown, dc_x, dc_y;
-    float    gain;
+    /* filter state for pink/brown lands in M2 */
 } wn_noise;
 
-void  wn_noise_init(wn_noise *n, int type, uint64_t seed);
+void  wn_noise_init(wn_noise *n, int type, uint64_t seed, uint64_t stream);
 void  wn_noise_set_type(wn_noise *n, int type);   /* resets filters, keeps RNG */
-void  wn_noise_render(wn_noise *n, float *out, unsigned frames, unsigned channels);
+float wn_noise_next(wn_noise *n);                 /* one sample in [-1, 1) */
 float wn_noise_gain_for(int type);                /* calibrated, fixed table */
 ```
 
-- PCG32 with an explicit seed; one state per channel to decorrelate them.
-- White: uniform over `[-1,1)`.
+- PCG32 with an explicit seed; one generator per channel. Channels are
+  decorrelated by **stream**, not by offsetting the seed: `stream = channel
+  index`, `inc = (stream << 1) | 1`. Generators with different increments walk
+  disjoint sequences, which offsetting a seed cannot guarantee.
+- White: uniform over `[-1,1)`, taken as `(x >> 8)` — 24 bits, exactly the
+  float32 significand width, so every conversion step is exact and the output
+  distribution has no rounding bias.
 - Pink: Paul Kellet, 7 poles.
 - Brown: leaky integrator (`a ~= 0.9995`) followed by a DC blocker. A higher leak flattens the slope (-4.87 dB/oct in the PoC); do not repeat that.
-- Gains come from a table calibrated with `check_spectrum.py`, not from invented constants.
-- `wn_noise_render` does not change `type` itself: the engine orchestrates type changes so it can crossfade.
+- Gains come from a table calibrated with `check_spectrum.py`, not from invented constants. White is analytic: RMS of a uniform distribution is `1/sqrt(3)`, and -18 dBFS is `10^(-18/20)`, so the gain is `0.218052`.
+- `wn_noise_next` does not change `type` itself: the engine orchestrates type changes so it can crossfade.
 - No `sin`/`exp`/`log` per sample.
 
 ---
@@ -137,6 +141,14 @@ Behavior:
 - Stop-after fade-out lasts 20 s; at the end `playing=0` and the daemon keeps running.
 - Startup and quit use a short fade to avoid pops.
 - The output buffer is always fully written, including during silence.
+
+`wn_engine_set_seed` reseeds both generators (streams stay 0 and 1). Only
+`--render` uses it, because there the output must depend on the seed alone
+(NFR-06). Playback uses the fixed default seed: noise needs no variety.
+
+Volume maps linearly, `0..100 -> 0.0..1.0`, multiplied by the calibrated type
+gain. Mono renders one generator and duplicates the sample, so both channels
+stay bit-identical (FR-13).
 
 ---
 
@@ -219,7 +231,11 @@ parse argv -> config load -> decide mode
 
 `--render` starts no daemon, opens no device, and writes no config. It uses the same `wn_engine_render` with an explicit seed so output matches playback.
 
+Block size is 512 frames, matching the planned device period, so the render loop and the audio callback have the same shape.
+
 WAV writer: 44-byte header, `float32`, 2 channels, 48 kHz. Any other extension produces raw little-endian interleaved float32. Expected data size: `384000 * seconds` bytes.
+
+At M1 only the raw path exists. A `.wav` path exits 1 with a message rather than writing raw bytes into a file the caller believes is a WAV.
 
 ---
 

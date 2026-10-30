@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M0 complete. CMake build, layer headers, size gate, and CI skeleton are in place. No DSP, audio device, IPC, or CLI behavior yet.
+**State:** M1 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32 + white noise, `--render` to raw float32, parser and tests. No pink/brown, no WAV, no audio device, no IPC, no daemon.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -184,6 +184,7 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | Milestone | Variant | Size | Budget |
 |---|---|---|---|
 | M0 | Linux, GCC 16.2.1, `-Os -flto -s`, miniaudio compiled but unreferenced | 10 KB | 150 KB |
+| M1 | M0 + PCG32, white noise, `--render`, parser, tests | 11 KB | 150 KB |
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
