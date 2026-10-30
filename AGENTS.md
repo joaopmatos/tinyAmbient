@@ -177,6 +177,16 @@ Runtime linking of ALSA/Pulse is the default; `ldd` must not list `libasound` or
 
 A regression above ~20 KB means something large slipped in.
 
+### Milestone measurements
+
+Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `size` ctest entry.
+
+| Milestone | Variant | Size | Budget |
+|---|---|---|---|
+| M0 | Linux, GCC 16.2.1, `-Os -flto -s`, miniaudio compiled but unreferenced | 10 KB | 150 KB |
+
+M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
+
 ### Per-OS notes
 
 - **Linux:** link dynamically against libc, load audio backends with `dlopen`. Do not attempt static musl plus ALSA.

@@ -1,3 +1,13 @@
+# Build directories
+build/
+build-*/
+out/
+
+# Render output (tests and --render)
+*.wav
+*.raw
+*.f32
+
 # Prerequisites
 *.d
 

@@ -1,0 +1,137 @@
+cmake_minimum_required(VERSION 3.20)
+
+project(tinyAmbient
+    VERSION 0.1.0
+    DESCRIPTION "Tiny ambient noise player"
+    LANGUAGES C)
+
+# --- Language settings -------------------------------------------------------
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)   # -std=c11, not gnu11
+
+# Static CRT on Windows (/MT): no VC++ Redistributable dependency.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+option(TA_SANITIZE "Build own code with ASan and UBSan" OFF)
+
+# --- Size budget (AGENTS.md 1.6) --------------------------------------------
+
+if(WIN32)
+    set(TA_SIZE_LIMIT_KB 300)
+else()
+    set(TA_SIZE_LIMIT_KB 150)
+endif()
+
+# --- Flag helpers ------------------------------------------------------------
+#
+# Release flags follow AGENTS.md section 4. -ffunction-sections/-fdata-sections
+# put every function and variable in its own section; --gc-sections then drops
+# the ones nothing references. Without that pair, linking miniaudio would pull
+# in the whole backends list even though v1 only calls the playback path.
+
+function(ta_optimize target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE
+            $<$<CONFIG:Release>:/O1>
+            $<$<CONFIG:Release>:/GL>
+            $<$<CONFIG:Release>:/Gy>
+            $<$<CONFIG:Debug>:/Od>
+            $<$<CONFIG:Debug>:/RTC1>)
+        target_link_options(${target} PRIVATE
+            $<$<CONFIG:Release>:/LTCG>
+            $<$<CONFIG:Release>:/OPT:REF>
+            $<$<CONFIG:Release>:/OPT:ICF>)
+    else()
+        target_compile_options(${target} PRIVATE
+            $<$<CONFIG:Release>:-Os>
+            $<$<CONFIG:Release>:-flto>
+            $<$<CONFIG:Release>:-ffunction-sections>
+            $<$<CONFIG:Release>:-fdata-sections>
+            $<$<CONFIG:Release>:-fno-asynchronous-unwind-tables>
+            $<$<CONFIG:Release>:-fno-unwind-tables>
+            $<$<CONFIG:Release>:-fno-ident>
+            $<$<CONFIG:Debug>:-O0>
+            $<$<CONFIG:Debug>:-g>)
+        target_link_options(${target} PRIVATE
+            $<$<CONFIG:Release>:-flto>
+            $<$<CONFIG:Release>:-Wl,--gc-sections>
+            $<$<CONFIG:Release>:-s>)
+    endif()
+endfunction()
+
+function(ta_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic
+            $<$<BOOL:${TA_SANITIZE}>:-fsanitize=address,undefined>
+            $<$<BOOL:${TA_SANITIZE}>:-fno-omit-frame-pointer>)
+        target_link_options(${target} PRIVATE
+            $<$<BOOL:${TA_SANITIZE}>:-fsanitize=address,undefined>)
+    endif()
+endfunction()
+
+# --- Layers ------------------------------------------------------------------
+#
+# Dependency direction is enforced by the link graph: core/ links nothing but
+# libc/libm, and only platform/ may call OS APIs.
+
+add_library(ta_core STATIC
+    src/core/noise.c)
+target_include_directories(ta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+ta_warnings(ta_core)
+ta_optimize(ta_core)
+
+add_library(ta_audio STATIC
+    src/audio/device.c)
+target_include_directories(ta_audio
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
+    SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+target_link_libraries(ta_audio PUBLIC ta_core)
+ta_warnings(ta_audio)
+ta_optimize(ta_audio)
+
+# miniaudio needs libdl (to dlopen ALSA/Pulse), pthreads, and libm on Linux.
+# libasound and libpulse are deliberately absent from this list.
+find_package(Threads REQUIRED)
+target_link_libraries(ta_audio PUBLIC Threads::Threads)
+if(UNIX)
+    target_link_libraries(ta_audio PUBLIC ${CMAKE_DL_LIBS} m)
+endif()
+
+add_executable(tinyambient
+    src/main.c)
+target_link_libraries(tinyambient PRIVATE ta_core ta_audio)
+ta_warnings(tinyambient)
+ta_optimize(tinyambient)
+
+# --- Size measurement --------------------------------------------------------
+#
+# Recorded at every milestone (AGENTS.md 6.6). Both a manual target and a ctest
+# entry, so CI fails on breach without extra workflow steps.
+
+set(TA_SIZE_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_size.cmake)
+
+add_custom_target(size-check
+    COMMAND ${CMAKE_COMMAND}
+        -DBINARY=$<TARGET_FILE:tinyambient>
+        -DLIMIT_KB=${TA_SIZE_LIMIT_KB}
+        -P ${TA_SIZE_SCRIPT}
+    DEPENDS tinyambient
+    COMMENT "Checking binary size against the ${TA_SIZE_LIMIT_KB} KB budget"
+    VERBATIM)
+
+enable_testing()
+
+add_test(NAME size
+    COMMAND ${CMAKE_COMMAND}
+        -DBINARY=$<TARGET_FILE:tinyambient>
+        -DLIMIT_KB=${TA_SIZE_LIMIT_KB}
+        -P ${TA_SIZE_SCRIPT})
