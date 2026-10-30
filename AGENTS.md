@@ -211,5 +211,5 @@ A regression above ~20 KB means something large slipped in.
 6. Measure the binary every milestone and record the number.
 7. Do not commit binaries; `.gitignore` already covers them.
 8. Do not copy the reference PoC blindly: it has known weak spots (brown noise leak, gain calibration).
-9. Explain the *why* in a few lines before writing code.
+9. Explain the *why* in a few lines before writing code. This is a project to learn systems programming concepts. The developer has 3 yoe as a Javascript and ABAP Developer (SAPUI5 Consultant).
 10. When a decision changes, update this file or the PRD in the same diff.
