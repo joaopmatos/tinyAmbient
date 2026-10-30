@@ -26,8 +26,8 @@ typedef enum {
 
 typedef struct {
     wn_cmd_kind kind;
-    int ivalue;          /* volume, minutes, seed, seconds */
-    const char *svalue;  /* noise type, render path */
+    int ivalue;         /* volume, minutes, seed, seconds */
+    const char *svalue; /* noise type, render path */
 } wn_cmd;
 
 /* Fixed capacity for one invocation's command list. */
@@ -37,11 +37,11 @@ typedef struct {
 
 /* Parses one argv-style token list. Returns the number of commands written to
  * `out`, or -1 on a usage error with a message in `err`. */
-int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out,
-                      int cap, char *err, size_t err_cap);
+int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
+                      char *err, size_t err_cap);
 
 /* Parses one newline-terminated IPC line without the terminator. */
-int wn_cmd_parse_line(const char *line, wn_cmd *out, int cap,
-                      char *err, size_t err_cap);
+int wn_cmd_parse_line(const char *line, wn_cmd *out, int cap, char *err,
+                      size_t err_cap);
 
 #endif /* WN_CORE_COMMAND_H */

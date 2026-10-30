@@ -1,0 +1,59 @@
+# Formatting for tinyAmbient.
+#
+# Derived from the code already in this repository, not from an external style
+# guide: pointer stars bind to the name (Linux kernel convention, and what the
+# 2,000 lines of architecture text in docs/ already show), function opening
+# braces go on their own line, control-statement braces stay attached.
+#
+# Adjusted from the MaJerle/c-code-style config: PointerAlignment Right instead
+# of Left, and return types stay on the declaration line. See AGENTS.md.
+#
+# clang-format is version-sensitive: its output changes between major releases.
+# The pinned version is in AGENTS.md and in scripts/check-format.sh. Run
+# scripts/check-format.sh --write to format, --check to verify (CI does this).
+---
+Language: C
+BasedOnStyle: LLVM
+
+# Layout
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 80
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# Braces
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterControlStatement: false
+  AfterStruct: false
+  AfterUnion: false
+  AfterEnum: false
+  AfterCaseLabel: false
+InsertBraces: true # control statements always get braces
+
+# Declarations
+PointerAlignment: Right
+DerivePointerAlignment: false
+AlwaysBreakAfterReturnType: None
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: None
+AlignTrailingComments: true
+
+# Statements
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+IndentCaseLabels: true
+SpaceBeforeParens: ControlStatements
+SeparateDefinitionBlocks: Always
+
+# Includes and comments
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+ReflowComments: false # the inline comments carry deliberate wrapping
+IndentPPDirectives: None
+...

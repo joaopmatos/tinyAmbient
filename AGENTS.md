@@ -187,6 +187,15 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
+### Formatting
+
+`clang-format` **23.1.3**, rules in `.clang-format`, enforced in CI by `scripts/check-format.sh`.
+
+- The version is pinned in three places: this line, `scripts/check-format.sh`, and the CI job. Formatting output changes between major releases, so a mismatch produces drift that no one caused.
+- The config encodes the code already in this repository. It is not imported from an external style guide; where an external rule conflicted with the existing headers, the existing headers won.
+- `third_party/` is never formatted. miniaudio is vendored verbatim.
+- Local use: `scripts/check-format.sh --write` to format, `scripts/check-format.sh` to verify.
+
 ### Per-OS notes
 
 - **Linux:** link dynamically against libc, load audio backends with `dlopen`. Do not attempt static musl plus ALSA.
