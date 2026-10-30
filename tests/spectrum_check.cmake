@@ -31,3 +31,23 @@ foreach(TYPE white pink brown)
     string(REPLACE "\n" "\n  " indented "${output}")
     message(STATUS "${TYPE}:\n  ${indented}")
 endforeach()
+
+# The same data through the WAV container must decode to the same spectrum, so
+# a malformed header cannot pass unnoticed.
+set(WAV "${WORKDIR}/spectrum_white.wav")
+execute_process(
+    COMMAND "${BINARY}" --render "${WAV}" --seconds 20 --seed 42 --noise white
+    RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "spectrum_check: wav render failed with ${result}")
+endif()
+
+execute_process(
+    COMMAND "${PYTHON}" "${SCRIPT}" "${WAV}" --type white --strict
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE errors)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "spectrum_check: WAV out of tolerance\n${output}${errors}")
+endif()
+message(STATUS "wav: ok")

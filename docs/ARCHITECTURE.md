@@ -249,7 +249,13 @@ Block size is 512 frames, matching the planned device period, so the render loop
 
 WAV writer: 44-byte header, `float32`, 2 channels, 48 kHz. Any other extension produces raw little-endian interleaved float32. Expected data size: `384000 * seconds` bytes.
 
-At M1 only the raw path exists. A `.wav` path exits 1 with a message rather than writing raw bytes into a file the caller believes is a WAV.
+The header is built in `ui/cli.c`, not `core/`: it is file I/O, and `core/` stays
+I/O-free. WAVE_FORMAT_IEEE_FLOAT (3) means the payload is byte-identical to a raw
+render of the same seed and type, with no sample conversion.
+
+The data size is known before writing starts, so the header needs no seek-back.
+At the 3600 s limit the data chunk is 1,382,400,000 bytes, which still fits the
+32-bit RIFF size field; total file size is `384000 * seconds + 44`.
 
 ---
 

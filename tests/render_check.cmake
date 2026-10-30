@@ -65,4 +65,50 @@ if(result EQUAL 0)
     message(FATAL_ERROR "render_check: seed change had no effect")
 endif()
 
+# --- WAV container (PRD FR-10) ----------------------------------------------
+
+set(WAV "${WORKDIR}/render_check.wav")
+set(WAV_SECONDS 1)
+execute_process(
+    COMMAND "${BINARY}" --render "${WAV}" --seconds ${WAV_SECONDS} --seed 42
+    RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "render_check: wav render failed with ${result}")
+endif()
+
+math(EXPR wav_data "${WAV_SECONDS} * 384000")
+math(EXPR wav_total "${wav_data} + 44")
+
+file(SIZE "${WAV}" wav_size)
+if(NOT wav_size EQUAL wav_total)
+    message(FATAL_ERROR
+        "render_check: wav is ${wav_size} bytes, expected ${wav_total} (44 header + ${wav_data})")
+endif()
+
+file(READ "${WAV}" header OFFSET 0 LIMIT 44 HEX)
+
+# Little-endian, so 48000 is 80bb0000 and 384000 is 00dc0500.
+function(expect_hex offset bytes expected label)
+    math(EXPR start "${offset} * 2")
+    math(EXPR length "${bytes} * 2")
+    string(SUBSTRING "${header}" ${start} ${length} got)
+    if(NOT got STREQUAL expected)
+        message(FATAL_ERROR
+            "render_check: wav ${label} at offset ${offset} is ${got}, expected ${expected}")
+    endif()
+endfunction()
+
+expect_hex(0 4 52494646 "RIFF tag")
+expect_hex(8 4 57415645 "WAVE tag")
+expect_hex(12 4 666d7420 "fmt tag")
+expect_hex(16 4 10000000 "fmt chunk size")
+expect_hex(20 2 0300 "audio format (IEEE float)")
+expect_hex(22 2 0200 "channel count")
+expect_hex(24 4 80bb0000 "sample rate")
+expect_hex(28 4 00dc0500 "byte rate")
+expect_hex(32 2 0800 "block align")
+expect_hex(34 2 2000 "bits per sample")
+expect_hex(36 4 64617461 "data tag")
+expect_hex(40 4 00dc0500 "data size")
+
 message(STATUS "render_check: ok")
