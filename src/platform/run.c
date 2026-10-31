@@ -415,14 +415,17 @@ int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
 {
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES inheritable;
-    STARTUPINFOA startup;
+    STARTUPINFOEXA startup;
+    LPPROC_THREAD_ATTRIBUTE_LIST attributes;
     PROCESS_INFORMATION child;
     HANDLE ready;
     HANDLE wait_for[2];
     char exe[WN_PATH_MAX];
     char command[4096];
+    SIZE_T size;
     size_t used;
     DWORD waited;
+    BOOL created;
     int i;
 
     if (ready_fd == NULL) {
@@ -471,13 +474,37 @@ int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
     }
 
     memset(&startup, 0, sizeof(startup));
-    startup.cb = sizeof(startup);
+    startup.StartupInfo.cb = sizeof(startup);
     memset(&child, 0, sizeof(child));
+
+    /* Inherit the readiness event and nothing else. Without the handle list the
+     * daemon would also inherit the caller's stdout, and a parent that reads
+     * that pipe to EOF (CMake's execute_process, a shell pipeline) would block
+     * until the daemon exits, which is exactly when it should have returned. */
+    size = 0;
+    (void)InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+    attributes = malloc(size);
+    if (attributes == NULL ||
+        !InitializeProcThreadAttributeList(attributes, 1, 0, &size) ||
+        !UpdateProcThreadAttribute(attributes, 0,
+                                   PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &ready,
+                                   sizeof(ready), NULL, NULL)) {
+        free(attributes);
+        (void)CloseHandle(ready);
+        (void)snprintf(err, err_cap, "cannot restrict the daemon handles");
+        return WN_DETACH_ERROR;
+    }
+    startup.lpAttributeList = attributes;
 
     /* DETACHED_PROCESS gives the daemon no console, so a background start does
      * not flash a window. */
-    if (!CreateProcessA(exe, command, NULL, NULL, TRUE, DETACHED_PROCESS, NULL,
-                        NULL, &startup, &child)) {
+    created = CreateProcessA(exe, command, NULL, NULL, TRUE,
+                             DETACHED_PROCESS | EXTENDED_STARTUPINFO_PRESENT,
+                             NULL, NULL, &startup.StartupInfo, &child);
+    (void)DeleteProcThreadAttributeList(attributes);
+    free(attributes);
+
+    if (!created) {
         (void)CloseHandle(ready);
         (void)snprintf(err, err_cap, "cannot start the daemon");
         return WN_DETACH_ERROR;

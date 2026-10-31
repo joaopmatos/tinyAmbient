@@ -46,6 +46,7 @@ function(run_exe exe)
             "TINYAMBIENT_IPC=${IPC_NAME}"
             "${exe}" ${ARGN}
         RESULT_VARIABLE result
+        TIMEOUT 60
         OUTPUT_VARIABLE output
         ERROR_VARIABLE errors)
 

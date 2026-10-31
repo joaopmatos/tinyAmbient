@@ -17,6 +17,13 @@
 #define MA_NO_ENGINE
 #define MA_NO_GENERATION
 
+#if defined(_WIN32)
+/* WASAPI is the only backend Windows 10/11 needs. DirectSound and WinMM are
+ * legacy and cost more than the whole IPC layer in the size budget. */
+#define MA_NO_DSOUND
+#define MA_NO_WINMM
+#endif
+
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 

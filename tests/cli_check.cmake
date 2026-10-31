@@ -15,6 +15,7 @@ function(expect_code expected label)
     execute_process(
         COMMAND "${BINARY}" ${ARGN}
         RESULT_VARIABLE result
+        TIMEOUT 60
         OUTPUT_VARIABLE output
         ERROR_VARIABLE errors)
 

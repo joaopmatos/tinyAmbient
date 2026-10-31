@@ -28,6 +28,7 @@ function(run_exe)
             "TINYAMBIENT_AUDIO=null"
             "${BINARY}" ${ARGN}
         RESULT_VARIABLE result
+        TIMEOUT 60
         OUTPUT_VARIABLE output
         ERROR_VARIABLE errors)
 

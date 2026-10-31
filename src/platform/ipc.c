@@ -48,18 +48,65 @@ struct wn_ipc_server {
     char path[WN_PATH_MAX];
 };
 
+/* Bounds one round trip. The daemon answers in tens of milliseconds, so two
+ * seconds is a generous safety net and matches the POSIX client's socket
+ * timeout: a wedged daemon must never hang the CLI. */
+#define WN_IPC_TIMEOUT_MS 2000
+
+/* Completes an overlapped operation that returned ERROR_IO_PENDING. Returns 0
+ * with `count` set, WN_IPC_RETRY when the pipe broke before transferring
+ * anything, or -1 on any other failure or a timeout. */
+static int finish_io(HANDLE pipe, OVERLAPPED *ov, DWORD *count)
+{
+    DWORD error = GetLastError();
+
+    if (error != ERROR_IO_PENDING) {
+        return error == ERROR_BROKEN_PIPE ? WN_IPC_RETRY : -1;
+    }
+    if (WaitForSingleObject(ov->hEvent, WN_IPC_TIMEOUT_MS) != WAIT_OBJECT_0) {
+        (void)CancelIoEx(pipe, ov);
+        return -1;
+    }
+    if (!GetOverlappedResult(pipe, ov, count, FALSE)) {
+        return GetLastError() == ERROR_BROKEN_PIPE ? WN_IPC_RETRY : -1;
+    }
+    return 0;
+}
+
+/* Writes every byte, or returns -1. */
+static int write_all(HANDLE pipe, OVERLAPPED *ov, const char *text,
+                     size_t length)
+{
+    while (length > 0) {
+        DWORD count = 0;
+
+        (void)ResetEvent(ov->hEvent);
+        if (!WriteFile(pipe, text, (DWORD)length, &count, ov) &&
+            finish_io(pipe, ov, &count) != 0) {
+            return -1;
+        }
+        if (count == 0) {
+            return -1;
+        }
+        text += count;
+        length -= count;
+    }
+    return 0;
+}
+
 /* One connect/send/receive round trip. Returns WN_IPC_OK, WN_IPC_ABSENT,
  * WN_IPC_ERROR, or WN_IPC_RETRY. */
 static int client_attempt(const char *path, const char *line, char *reply,
                           size_t cap)
 {
+    OVERLAPPED ov;
     HANDLE pipe;
-    DWORD count = 0;
-    size_t length = strlen(line);
+    HANDLE event;
     size_t used = 0;
+    int result = WN_IPC_ERROR;
 
     pipe = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                       OPEN_EXISTING, 0, NULL);
+                       OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
         DWORD error = GetLastError();
 
@@ -74,29 +121,36 @@ static int client_attempt(const char *path, const char *line, char *reply,
             return WN_IPC_RETRY;
         }
         pipe = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                           OPEN_EXISTING, 0, NULL);
+                           OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
         if (pipe == INVALID_HANDLE_VALUE) {
             return WN_IPC_ERROR;
         }
     }
 
-    if (!WriteFile(pipe, line, (DWORD)length, &count, NULL) ||
-        count != (DWORD)length || !WriteFile(pipe, "\n", 1, &count, NULL) ||
-        count != 1) {
+    event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (event == NULL) {
         (void)CloseHandle(pipe);
         return WN_IPC_ERROR;
+    }
+    memset(&ov, 0, sizeof(ov));
+    ov.hEvent = event;
+
+    if (write_all(pipe, &ov, line, strlen(line)) != 0 ||
+        write_all(pipe, &ov, "\n", 1) != 0) {
+        goto done;
     }
 
     while (used + 1 < cap) {
         DWORD got = 0;
 
-        if (!ReadFile(pipe, reply + used, (DWORD)(cap - 1 - used), &got,
-                      NULL)) {
-            if (GetLastError() == ERROR_BROKEN_PIPE) {
-                break;
+        (void)ResetEvent(event);
+        if (!ReadFile(pipe, reply + used, (DWORD)(cap - 1 - used), &got, &ov)) {
+            int status = finish_io(pipe, &ov, &got);
+
+            if (status != 0) {
+                result = status == WN_IPC_RETRY ? WN_IPC_RETRY : WN_IPC_ERROR;
+                goto done;
             }
-            (void)CloseHandle(pipe);
-            return WN_IPC_ERROR;
         }
         if (got == 0) {
             break;
@@ -107,12 +161,12 @@ static int client_attempt(const char *path, const char *line, char *reply,
         }
     }
     reply[used] = '\0';
-    (void)CloseHandle(pipe);
+    result = used == 0 ? WN_IPC_RETRY : WN_IPC_OK;
 
-    if (used == 0) {
-        return WN_IPC_RETRY;
-    }
-    return WN_IPC_OK;
+done:
+    (void)CloseHandle(event);
+    (void)CloseHandle(pipe);
+    return result;
 }
 
 int wn_ipc_client_send(const char *line, char *reply, size_t cap)
