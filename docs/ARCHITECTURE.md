@@ -20,11 +20,15 @@ No UI thread in v1. No locks between the two: all communication goes through ato
 | `noise_type` | main | audio |
 | `playing` | main | audio |
 | `volume_milli` | main | audio |
+| `mono` | main | audio |
+| `fade_in_req`, `fade_out_ms` | main | audio (consumed with an exchange) |
 | `stop_at_ms` (monotonic) | main | main |
-| filter phases, RNG state | audio | audio |
+| filter phases, RNG state, fade envelopes | audio | audio |
 | config on disk | main | main |
 
-The audio thread never reads the stop-after deadline. The main thread checks it and clears `playing` once the fade completes.
+The audio thread never reads the stop-after deadline. The main thread checks it
+and requests a stop fade; the engine clears `playing` itself when the fade lands,
+so the daemon observes the pause without inspecting the envelope.
 
 ---
 
@@ -56,6 +60,9 @@ Contract:
   `play`, and `--play` all parse the same way.
 - Rejects the combinations listed in PRD section 7 (render with daemon
   commands, status with content commands, seconds or seed without render).
+  `--status` also rejects `--foreground`, because that would start a session;
+  `--portable` stays legal next to `--status`, since it only selects which file
+  is read.
 - Validates syntax plus the ranges it can check locally: `volume` 0–100,
   `stop-after` 1–10080 or `off`, `seconds` 1–3600, `seed` 0–2147483647, and
   the three noise names.
@@ -168,30 +175,60 @@ what makes the PRD targets 0, -3, and -6 dB/oct rather than 3, 0, and -3.
 
 ## 5. `core/engine.c`
 
-Owns observable state and, from M6, applies fades. It is the only thing the
-callback calls.
+Owns observable state and applies the fades. It is the only thing the callback
+calls.
 
-Internal state at M5:
+Cross-thread state (AGENTS.md 1.2), all `_Atomic int` and read once per buffer:
 
-- two `wn_noise` instances (left/right), or one generator duplicated when
-  `mono` is set;
-- `type`, `volume`, `mono`, and `playing`;
-- an atomic `frames_rendered` counter for diagnostics.
+- `type` — requested noise type. `wn_engine_noise` reports it immediately, so
+  status shows the destination of a crossfade, not its midpoint.
+- `playing`.
+- `volume_milli` — 0..1000, per-mille of full scale, so `_Atomic float` is never
+  needed. The value is always a multiple of ten, so the 0..100 reading is exact.
+- `mono` — a parameter like the others; a plain `int` shared with the audio
+  thread would be a data race.
+- `fade_in_req` / `fade_out_ms` — one-shot requests the audio thread consumes
+  with an atomic exchange. `wn_engine_fade_in` is the device-resume path
+  (FR-16); `wn_engine_fade_out` is the session timer's expiry (FR-05).
 
-`wn_engine_command` parses a line with `wn_cmd_parse_line` and applies every
-command only after the whole line is known to be supported, so an invalid tail
-cannot leave the engine half-applied. It accepts `noise`, `volume`, `play`,
-`pause`, `toggle`, `mono`, and `stereo`. Status, quit, and stop-after belong to
-the daemon loop, not the engine.
+Audio-thread-only state: two `wn_noise` generators (left/right), a second pair
+that holds the outgoing noise during a crossfade, and two independent,
+piecewise-linear progressions:
 
-Behavior at M5:
+1. **Gain envelope.** One envelope covers play, pause, and volume: the target is
+   `playing ? volume_milli : 0`, and any change restarts a linear fade from the
+   current value over `WN_FADE_MS` (20 ms). Linear ramps need no `sin`/`exp`, and
+   the envelope snaps to its exact target when the fade lands, so it never
+   lingers in denormal range. The engine starts at zero and fades in, which is
+   the "no clicks on start" goal; `wn_engine_fade_in` re-triggers the same ramp
+   after a device restart. A stop fade is the same envelope with a long
+   duration; when it lands the audio thread stores `playing = 0`, so the daemon
+   observes the pause without inspecting the envelope. A playing/volume change
+   during the stop fade cancels it: the target changed, which means the user is
+   still working.
+2. **Noise crossfade.** On a type change the audio thread copies the current
+   generators to `fade_gen`, then calls `wn_noise_set_type` on the live ones
+   (filters reset, RNG preserved). The copy continues the old sequence from
+   exactly the next sample, so the mix `old + (new - old) * t` starts on the
+   audible sample and not on a step. Both sides advance during the fade, `t`
+   reaches 1 over `fade_ms`, and the mix stays within `[-1, 1]` because it
+   interpolates two bounded signals. A second change during a running crossfade
+   is deferred until it ends, so the mix always has one continuous path. While
+   the envelope is at zero the switch is instant: a crossfade nobody hears only
+   costs CPU.
 
-- Parameter changes are immediate. M6 turns the fields into atomics read once
-  per buffer and adds the 20 ms volume fade and the `fade_ms` crossfade.
-- `volume 0` produces silence with `playing=1`; generation continues, so filter
-  state and RNG progress do not depend on the volume.
-- A paused engine writes silence and does not generate. M6 replaces the abrupt
-  stop with a fade.
+Other behavior:
+
+- `volume 0` produces exact silence with `playing=1`; a paused or muted engine
+  skips generation, writes a fully zeroed buffer, and still advances its
+  bookkeeping and the frame counter.
+- Mono duplicates the mixed left sample, so both channels stay bit-identical
+  (FR-13).
+- `wn_engine_command` parses a line with `wn_cmd_parse_line` and applies every
+  command only after the whole line is known to be supported, so an invalid tail
+  cannot leave the engine half-applied. It accepts `noise`, `volume`, `play`,
+  `pause`, `toggle`, `mono`, and `stereo`. Status, quit, and stop-after belong to
+  the daemon loop, not the engine.
 - The output buffer is always fully written, including during silence.
 - `wn_engine_noise`, `wn_engine_volume`, `wn_engine_is_mono`, and
   `wn_engine_is_playing` expose the state for status output. The stop-after
@@ -199,7 +236,9 @@ Behavior at M5:
 
 `wn_engine_set_seed` reseeds both generators (streams stay 0 and 1). Only
 `--render` uses it, because there the output must depend on the seed alone
-(NFR-06). Playback uses the fixed default seed: noise needs no variety.
+(NFR-06). Playback uses the fixed default seed: noise needs no variety. It is
+the one function that touches the generators from outside the audio thread, and
+it runs before playback starts.
 
 Volume maps linearly, `0..100 -> 0.0..1.0`, multiplied by the calibrated type
 gain. Mono renders one generator and duplicates the sample, so both channels
@@ -217,9 +256,15 @@ The only file that includes `miniaudio.h` with `MINIAUDIO_IMPLEMENTATION`.
 - No allocation, locks, logging, or syscalls inside the callback.
 - The device and the forced context are static, never heap-allocated: a fixed address cannot be freed under a running callback.
 - `notificationCallback` runs on a miniaudio-owned thread and only stores `_Atomic int restart_requested`, for `stopped`, `rerouted`, and `interruption_began`. A `stopping` guard (`_Atomic`, relaxed — only the value matters, and a plain int would be a cross-thread data race) keeps our own `ma_device_uninit` from arming it.
-- `wn_audio_needs_restart` exposes the flag. The backoff loop (100 ms, 500 ms, 2 s, then every 5 s) belongs to `platform/` and lands in M7, because that is where the main loop is.
-- Parameters and `playing` survive a restart; resuming must not click (fades land in M6).
-- At M4 nothing in the shipped binary calls `wn_audio_start`, so `--gc-sections` still removes miniaudio entirely. `tests/play_check.c` is the harness that exercises the path, and the size it reports (about 86 KB of `.text`) is the real cost the binary will carry once M7 gives the device a caller.
+- `wn_audio_needs_restart` exposes the flag. The backoff loop lives in
+  `platform/run.c` (M6): 100 ms, 500 ms, 2 s, then every 5 s, retried for as
+  long as the daemon runs.
+- Parameters and `playing` survive a restart, and a resumed device receives
+  `wn_engine_fade_in`, so restarting is click-free (FR-16).
+- From M6 the shipped binary calls `wn_audio_start` from the run loop, so
+  miniaudio and the ALSA/Pulse backends are part of the product binary for the
+  first time. `tests/play_check.c` remains the direct harness for the device
+  path.
 - `TINYAMBIENT_AUDIO=null` forces miniaudio's null backend, which drives the callback in real time without hardware. CI sets it, so the audio path has automated coverage; it also separates a device fault from a DSP fault when debugging.
 
 ---
@@ -268,7 +313,32 @@ this module owns the path-dependent parts.
 
 ---
 
-## 9. `platform/ipc.c`
+## 9. `platform/run.c`
+
+The daemon main loop at M6: device supervision, the session timer, and quit
+handling. M7 adds IPC polling and daemon forwarding to the same loop.
+
+- Starts the device before entering the loop. A device missing at startup is a
+  runtime failure (exit 1, clear message); a device lost later is retried.
+- Wakes every 50 ms to check three things: the quit flag, the restart flag, and
+  the stop-after deadline. One tick bounds the latency of all three.
+- **Restart backoff (FR-16):** 100 ms, 500 ms, 2 s, then every 5 s, forever.
+  The loop stops the dead device first, then reintroduces it with
+  `wn_audio_start`; on success it calls `wn_engine_fade_in`, so the resume
+  starts from silence. Engine state is untouched by any of this.
+- **Stop-after (FR-05):** the deadline is monotonic milliseconds computed at
+  start from the CLI value. At expiry the loop calls `wn_engine_fade_out`, the
+  engine fades and pauses itself, and the loop clears the deadline. The timer is
+  session state; it is never written to configuration.
+- SIGINT and SIGTERM set an atomic quit flag from the handler (`signal()` plus a
+  lock-free store, both async-signal-safe). Any thread may also call
+  `wn_platform_request_quit`, which is how the test harness stops the loop.
+- `stop_fade_ms` is a parameter so a test build can shorten the product's 20 s
+  fade without a second code path.
+
+---
+
+## 10. `platform/ipc.c`
 
 | OS | Address | Permissions |
 |---|---|---|
@@ -292,7 +362,7 @@ Details:
 
 ---
 
-## 10. `ui/cli.c`
+## 11. `ui/cli.c`
 
 Turns `argv` into `wn_cmd` through `core/command.c` and formats output. Flags and
 precedence rules live in PRD section 7; do not duplicate them here.
@@ -305,30 +375,38 @@ precedence rules live in PRD section 7; do not duplicate them here.
   recognizes; after an unrecognized token, help and version still win, exactly
   as they do after `--bogus` (rule 6).
 - `--status` prints exactly the six lines from PRD section 6, FR-08, in order,
-  followed by one newline each. At M5 there is no daemon, so it always reports
-  the no-daemon form: `playing=0`, `stop_after=off`, and the persisted settings.
-  M7 inserts the IPC query ahead of this fallback.
+  followed by one newline each. With no daemon it reports the no-daemon form:
+  `playing=0`, `stop_after=off`, and the persisted settings. M7 inserts the IPC
+  query ahead of this fallback.
+- `--foreground` loads the configuration, applies setting commands (and saves
+  them), applies playback commands to the engine, and then runs
+  `wn_platform_run` until SIGINT or SIGTERM. It is the only session path until
+  M7 adds the daemon and IPC.
 - Setting commands (`noise`, `volume`, `mono`, `stereo`) load the file, apply in
   written order, and save once. `--portable` changes the path, nothing else.
 - `--render` neither reads nor writes configuration.
-- Playback and timer commands are session state. Until M7 gives them a daemon
-  to talk to, they exit 1 with a diagnostic; they never write configuration.
+- Playback and timer commands without `--foreground` are session state with no
+  process to talk to; they exit 1 with a diagnostic and never write
+  configuration.
 - Errors go to `stderr` prefixed with `tinyambient: `.
 - Exit codes: 0 success, 1 runtime failure, 2 usage error, 3 IPC failure.
 
 ---
 
-## 11. `main.c` and `--render`
+## 12. `main.c` and `--render`
 
 `main.c` only wires things together:
 
 ```
 parse argv -> config load -> decide mode
-  +- render   -> in-memory engine -> writer -> exit
-  +- status   -> IPC if a daemon exists, else config -> exit
-  +- content  -> IPC if a daemon exists, else start daemon -> exit
-  +- no args  -> start daemon if absent, then exit
+  +- render     -> in-memory engine -> writer -> exit
+  +- status     -> IPC if a daemon exists, else config -> exit
+  +- foreground -> config + engine -> wn_platform_run -> exit
+  +- content    -> IPC if a daemon exists, else start daemon -> exit
+  +- no args    -> start daemon if absent, then exit
 ```
+
+The last three modes land in M7; `--foreground` is the M6 form of the daemon.
 
 `--render` starts no daemon, opens no device, and reads and writes no config. It
 uses the same `wn_engine_render` with an explicit seed so output matches
@@ -350,7 +428,7 @@ At the 3600 s limit the data chunk is 1,382,400,000 bytes, which still fits the
 
 ---
 
-## 12. Invariants to test
+## 13. Invariants to test
 
 1. Same seed and parameters produce byte-identical output.
 2. No sample outside `[-1.0, 1.0]`.
@@ -366,3 +444,5 @@ At the 3600 s limit the data chunk is 1,382,400,000 bytes, which still fits the
 11. `--portable` writes `config.ini` next to the executable and ignores
     `XDG_CONFIG_HOME`/`APPDATA`.
 12. A saved config is mode `0600` and leaves no temporary file behind.
+13. The first sample after an engine start or a device restart is exactly zero;
+    a stop fade ends with `playing=0` and exact silence.

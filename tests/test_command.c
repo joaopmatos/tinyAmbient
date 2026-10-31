@@ -308,6 +308,8 @@ static void test_combinations(void)
     static const char *const status_play[] = {"t", "--status", "play", NULL};
     static const char *const status_portable[] = {"t", "--status", "--portable",
                                                   NULL};
+    static const char *const status_foreground[] = {"t", "--status",
+                                                    "--foreground", NULL};
     static const char *const play_pause[] = {"t", "play", "pause", NULL};
     static const char *const mono_stereo[] = {"t", "--mono", "--stereo", NULL};
     wn_cmd cmds[WN_CMD_MAX];
@@ -327,6 +329,7 @@ static void test_combinations(void)
 
     CHECK(parse(status_noise, cmds, err, sizeof(err)) == -1);
     CHECK(parse(status_play, cmds, err, sizeof(err)) == -1);
+    CHECK(parse(status_foreground, cmds, err, sizeof(err)) == -1);
     CHECK(parse(status_portable, cmds, err, sizeof(err)) == 2);
     CHECK(cmds[0].kind == WN_CMD_STATUS);
     CHECK(cmds[1].kind == WN_CMD_PORTABLE);

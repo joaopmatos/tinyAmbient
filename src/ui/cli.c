@@ -9,6 +9,7 @@
 #include "core/noise.h"
 #include "platform/config_file.h"
 #include "platform/paths.h"
+#include "platform/platform.h"
 
 /* Provided by CMake from the project version, so there is one source of truth
  * (PRD FR-15). */
@@ -345,6 +346,102 @@ static void apply_persisted(wn_config *cfg, const wn_cmd *cmd)
     }
 }
 
+/* --foreground: run the session attached to this terminal (PRD FR-12).
+ *
+ * At M6 there is no IPC, so this is also how the stop-after timer and the
+ * device recovery path are exercised on a real machine; M7 turns the same loop
+ * into the background daemon and adds command forwarding. Setting commands
+ * persist before the engine starts, so the engine comes up in the requested
+ * state and the file matches it (FR-06, section 7 rule 7). Playback commands
+ * are session state and never touch the file. */
+static int run_foreground(const wn_cmd *cmds, int n, int portable)
+{
+    wn_config cfg;
+    char path[WN_PATH_MAX];
+    char text[WN_CONFIG_TEXT_MAX];
+    size_t text_len = 0;
+    wn_engine *engine;
+    long stop_after_ms = -1;
+    int have_persist = 0;
+    int result;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (cmds[i].kind == WN_CMD_QUIT) {
+            /* Nothing is running yet, so quitting is already satisfied. */
+            return WN_EXIT_OK;
+        }
+    }
+
+    result = resolve_config_path(path, sizeof(path), portable);
+    if (result != WN_EXIT_OK) {
+        return result;
+    }
+    result = load_config_file(path, &cfg, text, &text_len);
+    if (result != WN_EXIT_OK) {
+        return result;
+    }
+
+    for (i = 0; i < n; i++) {
+        switch (cmds[i].kind) {
+            case WN_CMD_NOISE:
+            case WN_CMD_VOLUME:
+            case WN_CMD_MONO:
+            case WN_CMD_STEREO:
+                apply_persisted(&cfg, &cmds[i]);
+                have_persist = 1;
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (have_persist) {
+        result =
+            save_config_file(path, &cfg, text_len > 0 ? text : NULL, portable);
+        if (result != WN_EXIT_OK) {
+            return result;
+        }
+    }
+
+    engine = wn_engine_create(&cfg);
+    if (engine == NULL) {
+        wn_cli_error("out of memory");
+        return WN_EXIT_RUNTIME;
+    }
+
+    for (i = 0; i < n; i++) {
+        switch (cmds[i].kind) {
+            case WN_CMD_PLAY:
+                (void)wn_engine_command(engine, "play");
+                break;
+            case WN_CMD_PAUSE:
+                (void)wn_engine_command(engine, "pause");
+                break;
+            case WN_CMD_TOGGLE:
+                (void)wn_engine_command(engine, "toggle");
+                break;
+            case WN_CMD_STOP_AFTER:
+                stop_after_ms = cmds[i].ivalue == WN_STOP_AFTER_OFF
+                                    ? -1
+                                    : (long)cmds[i].ivalue * 60000L;
+                break;
+            default:
+                break;
+        }
+    }
+
+    result = wn_platform_run(engine, stop_after_ms, WN_STOP_FADE_MS);
+    wn_engine_destroy(engine);
+
+    if (result != 0) {
+        wn_cli_error("cannot open an audio device");
+        return WN_EXIT_RUNTIME;
+    }
+
+    return WN_EXIT_OK;
+}
+
 int wn_cli_main(int argc, const char *const *argv)
 {
     wn_cmd cmds[WN_CMD_MAX];
@@ -362,6 +459,7 @@ int wn_cli_main(int argc, const char *const *argv)
     int have_status = 0;
     int have_persist = 0;
     int have_session = 0;
+    int have_foreground = 0;
     int portable = 0;
     int want_help = 0;
     int want_version = 0;
@@ -431,6 +529,8 @@ int wn_cli_main(int argc, const char *const *argv)
                 portable = 1;
                 break;
             case WN_CMD_FOREGROUND:
+                have_foreground = 1;
+                break;
             case WN_CMD_PLAY:
             case WN_CMD_PAUSE:
             case WN_CMD_TOGGLE:
@@ -464,10 +564,14 @@ int wn_cli_main(int argc, const char *const *argv)
         return WN_EXIT_OK;
     }
 
+    if (have_foreground) {
+        return run_foreground(cmds, n, portable);
+    }
+
     if (have_session || !have_persist) {
-        /* IPC and the daemon loop land in M7. Until then, session commands and
-         * a bare invocation have no process to talk to. */
-        wn_cli_error("daemon mode is not implemented yet");
+        /* The background daemon and IPC land in M7. Until then --foreground
+         * is the only way to run a session. */
+        wn_cli_error("daemon mode is not implemented yet; use --foreground");
         return WN_EXIT_RUNTIME;
     }
 

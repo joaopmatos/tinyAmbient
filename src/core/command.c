@@ -131,7 +131,9 @@ static int validate(const wn_cmd *cmds, int count, char *err, size_t err_cap)
     }
 
     if (has_status) {
-        /* PRD section 7 rule 4: status reports, it does not change anything. */
+        /* PRD section 7 rule 4: status reports, it does not change anything.
+         * --portable only changes which file is read, so it is allowed;
+         * --foreground would start a session, so it is not. */
         for (i = 0; i < count; i++) {
             wn_cmd_kind kind = cmds[i].kind;
 
@@ -139,7 +141,8 @@ static int validate(const wn_cmd *cmds, int count, char *err, size_t err_cap)
                 kind == WN_CMD_TOGGLE || kind == WN_CMD_NOISE ||
                 kind == WN_CMD_VOLUME || kind == WN_CMD_STOP_AFTER ||
                 kind == WN_CMD_MONO || kind == WN_CMD_STEREO ||
-                kind == WN_CMD_QUIT || kind == WN_CMD_RENDER) {
+                kind == WN_CMD_FOREGROUND || kind == WN_CMD_QUIT ||
+                kind == WN_CMD_RENDER) {
                 set_error(err, err_cap,
                           "--status cannot be combined with other commands");
                 return -1;

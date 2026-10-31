@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M5 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, and the corresponding CLI, config, and engine tests. No IPC, no daemon, no fades or auto-stop yet.
+**State:** M6 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, and the corresponding CLI, config, engine, and session tests. No IPC and no background daemon yet.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -27,7 +27,7 @@ If the PRD and this file disagree, the PRD wins and this file is fixed in the sa
 ## 1. Hard constraints
 
 1. The audio callback does not allocate, block, log, or perform I/O.
-2. Parameters cross the thread boundary through integer atomics: `_Atomic int` for type and playing, `_Atomic int volume_milli` (avoids `_Atomic float`). The stop-after deadline is main-thread state and needs no atomic.
+2. Parameters cross the thread boundary through integer atomics: `_Atomic int` for type, playing, volume_milli, and mono, plus the one-shot fade requests (`fade_in_req`, `fade_out_ms`). `volume_milli` avoids `_Atomic float`. The stop-after deadline is main-thread state and needs no atomic.
 3. `core/` includes only `libc`, `libm`, and C11 headers (`stdint`, `stdbool`, `stddef`, `stdatomic`). No OS headers.
 4. Allowed external dependencies: libc/libm; ALSA and Pulse loaded with `dlopen`; a pinned, vendored miniaudio. Anything else needs written justification and a measured size delta.
 5. `miniaudio` is not upgraded without testing audio and measuring the binary.
@@ -53,6 +53,7 @@ src/
   platform/
     paths.c  paths.h     # per-OS config directories
     config_file.c .h     # load, atomic save (temp + fsync + rename)
+    run.c                # daemon loop: device backoff, stop-after timer, quit
     ipc.c    ipc.h       # Unix socket / named pipe
   ui/
     cli.c                # flags, output, exit codes
@@ -61,6 +62,8 @@ tests/
   test_config.c
   test_command.c
   test_engine.c
+  play_check.c           # device harness, runs under the null backend
+  session_check.c        # run-loop harness: stop-after, quit (POSIX only)
   check_spectrum.py      # slopes/RMS over raw or WAV
 third_party/
   miniaudio.h
@@ -76,7 +79,7 @@ Tests grow per milestone; the list above is the M7 target.
 |---|---|
 | `core/` | libc, libm, C11 headers |
 | `audio/` | `core/`, miniaudio |
-| `platform/` | libc and OS APIs (the only layer that uses them) |
+| `platform/` | libc and OS APIs (the only layer that uses them), `core/`, `audio/` |
 | `ui/` | `core/`, `platform/` |
 | `main.c` | all layers; no DSP, no UI logic |
 
@@ -93,7 +96,7 @@ void       wn_engine_render(wn_engine *e, float *out, unsigned frames);
 int        wn_engine_is_playing(const wn_engine *e);
 
 /* platform.h */
-int  wn_platform_run(wn_engine *e);
+int  wn_platform_run(wn_engine *e, long stop_after_ms, long stop_fade_ms);
 void wn_platform_request_quit(void);
 int  wn_platform_ipc_send(const char *line, char *reply, size_t cap);
 ```
@@ -130,8 +133,9 @@ Rules:
 
 - Slope measured in third-octave bands from 40 Hz to 12 kHz.
 - No `sin`, `exp`, or `log` per sample; coefficients are computed at init.
+- Fades are linear and frame-based: 20 ms for play, pause, volume, and device resume; `fade_ms` for a type crossfade; 20 s at stop-after expiry. A linear ramp needs no transcendental function and snaps to its exact target.
 - Soft clip is a safety net; the gain should prevent clipping in the first place.
-- Denormals: flush-to-zero on x86 or a minimum DC offset to stay out of denormal range.
+- Denormals: generation is skipped while the envelope is at zero, and fades snap to their exact target, so filters never process denormal input and the envelope never lingers near it. No flush-to-zero setup is needed.
 - Blue, gray, and green are out of v1. Do not implement them.
 
 ---
@@ -192,10 +196,13 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | M4 | M3 + miniaudio device and callback (product binary, unreachable until M7) | 15 KB | 150 KB |
 | M4 | `play_check` harness, which actually opens the device | 91 KB | — |
 | M5 | M4 + full parser, engine commands, INI config, atomic writes, portable mode, status | 23 KB | 150 KB |
+| M6 | M5 + parameter atomics, fades, crossfades, stop-after timer, device restart backoff, `--foreground` | 108 KB | 150 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
 M5 note: the file grew from 15,248 to 23,608 bytes (+8,360). `.text` is 15,529 bytes, `.data` 800, `.bss` 48. The cost is the full command parser, the INI parser/formatter, paths, the atomic writer, and the CLI status/persistence paths. The number is still an order of magnitude under the budget.
+
+M6 note: the file grew from 23,608 to 110,120 bytes (+84.5 KB). This is the milestone where the product binary starts calling `wn_audio_start`, so miniaudio and the ALSA/Pulse backends stop being garbage-collected; the M4 probe already measured about 91 KB of `.text` for that path. The run loop, the fades, and `--foreground` add roughly 10 KB on top. `.text` is 101,307 bytes, `.data` 1,228, `.bss` 4,896. `ldd` still lists neither `libasound` nor `libpulse`.
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
@@ -219,7 +226,7 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 
 - **Linux:** link dynamically against libc, load audio backends with `dlopen`. Do not attempt static musl plus ALSA.
 - **Windows:** `/MT` to avoid the VC++ Redistributable; `/O1 /GL /Gy /OPT:REF /OPT:ICF`. Own code needs `/std:c11 /experimental:c11atomics`: MSVC refuses `<stdatomic.h>` without the explicit atomic opt-in, and `CMAKE_C_STANDARD` alone does not add it.
-- **CI:** Ubuntu + Windows matrix, plus a third job that builds with ASan and UBSan (`-DTA_SANITIZE=ON`). Linux installs `alsa-lib-devel`/`libasound2-dev` and `libpulse-dev`. No runner has an audio device, so `audio/` is exercised through miniaudio's null backend (`TINYAMBIENT_AUDIO=null`) and everything else through offline renders.
+- **CI:** Ubuntu + Windows matrix, plus a third job that builds with ASan and UBSan (`-DTA_SANITIZE=ON`). Linux installs `alsa-lib-devel`/`libasound2-dev` and `libpulse-dev`. No runner has an audio device, so `audio/` is exercised through miniaudio's null backend (`TINYAMBIENT_AUDIO=null`) and everything else through offline renders. The run-loop test (`tests/session_check.c`) is POSIX-only: it needs a second thread to observe a loop that must keep running, and MSVC has no C11 threads.
 
 - **Sanitizers locally:** Fedora ships the sanitizer runtimes separately. `sudo dnf install libasan libubsan`, then configure with `-DTA_SANITIZE=ON`. Without those packages the build links but the binary cannot run.
 

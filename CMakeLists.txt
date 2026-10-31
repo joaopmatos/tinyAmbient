@@ -136,7 +136,8 @@ endif()
 # formatter live there and the atomic write lives here.
 add_library(ta_platform STATIC
     src/platform/paths.c
-    src/platform/config_file.c)
+    src/platform/config_file.c
+    src/platform/run.c)
 target_link_libraries(ta_platform PUBLIC ta_core)
 ta_warnings(ta_platform)
 ta_c11(ta_platform)
@@ -170,6 +171,12 @@ target_link_libraries(ta_audio PUBLIC Threads::Threads)
 if(UNIX)
     target_link_libraries(ta_audio PUBLIC ${CMAKE_DL_LIBS} m)
 endif()
+
+# The daemon loop (platform/run.c) starts and supervises the device, so the
+# platform layer depends on audio/. Declared after ta_audio exists: CMake
+# resolves link targets at generate time, but keeping the definition order
+# obvious costs nothing. audio/ never links back to platform/.
+target_link_libraries(ta_platform PUBLIC ta_audio)
 
 add_executable(tinyambient
     src/main.c)
@@ -256,6 +263,23 @@ if(TA_SANITIZE AND NOT MSVC)
 endif()
 add_test(NAME playback COMMAND play_check 600)
 set_tests_properties(playback PROPERTIES ENVIRONMENT "TINYAMBIENT_AUDIO=null")
+
+# Run loop: stop-after expiry, the engine pausing itself, and a clean quit
+# (PRD FR-05). POSIX only: the harness needs a second thread to observe a loop
+# that is supposed to keep running, and MSVC has no C11 threads.
+if(UNIX)
+    add_executable(session_check tests/session_check.c)
+    target_link_libraries(session_check PRIVATE ta_platform Threads::Threads)
+    ta_warnings(session_check)
+    ta_c11(session_check)
+    ta_sanitize(session_check)
+    ta_optimize(session_check)
+    if(TA_SANITIZE AND NOT MSVC)
+        target_link_options(session_check PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_test(NAME session COMMAND session_check)
+    set_tests_properties(session PROPERTIES ENVIRONMENT "TINYAMBIENT_AUDIO=null")
+endif()
 
 # End-to-end render checks: byte count and determinism (PRD FR-10, NFR-06).
 add_test(NAME render

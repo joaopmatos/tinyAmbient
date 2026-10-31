@@ -2,26 +2,46 @@
 #define WN_CORE_ENGINE_H
 
 #include "core/config.h"
+#include "core/noise.h"
 
-/* Owns the observable state (playing, type, volume, mono) and, from M6, the
- * fades. This is the only entry point the audio callback may call.
+/* Owns the observable state (playing, type, volume, mono) and the fades. This
+ * is the only entry point the audio callback may call.
  *
- * M5 applies parameter changes immediately through wn_engine_command. The
- * atomics and the 20 ms/250 ms fades land in M6; until then the command path is
- * exercised by test_engine and by the daemon once M7 gives it a caller. */
+ * The main thread applies commands through wn_engine_command and requests
+ * fades through wn_engine_fade_in/wn_engine_fade_out. Parameters cross the
+ * thread boundary as integer atomics and are read once per buffer; the
+ * generators and the fade envelopes belong to the audio thread alone. */
 typedef struct wn_engine wn_engine;
+
+/* Fade timings from the PRD. Play, pause, volume, and device resume share the
+ * short fade (FR-01, FR-03); a noise switch uses the configured fade_ms
+ * (FR-04); session expiry fades out over 20 s (FR-05). */
+#define WN_FADE_MS 20
+#define WN_STOP_FADE_MS 20000
 
 wn_engine *wn_engine_create(const wn_config *cfg);
 void wn_engine_destroy(wn_engine *e);
 
 /* Reseeds both channel generators. Only used by --render, where the output must
- * depend on the seed alone (PRD NFR-06). */
+ * depend on the seed alone (PRD NFR-06). Must run before the audio thread
+ * exists. */
 void wn_engine_set_seed(wn_engine *e, uint64_t seed);
 
 /* Applies one command line ("noise pink", "volume 40", "toggle"). Returns 0 on
  * success, non-zero for an unknown or invalid command. The line is copied, so
- * the caller's buffer is left untouched. */
+ * the caller's buffer is left untouched. Safe to call from the main thread
+ * while the audio thread renders: only atomics are written. */
 int wn_engine_command(wn_engine *e, const char *line);
+
+/* Fades to silence over `ms` milliseconds and pauses when the fade lands.
+ * This is the session timer's expiry (PRD FR-05): the daemon requests it and
+ * observes playing drop to 0. A play/pause or volume change during the fade
+ * cancels the pause, because it means the user is still working. */
+void wn_engine_fade_out(wn_engine *e, unsigned ms);
+
+/* Restarts the gain envelope from silence over WN_FADE_MS. Called after the
+ * audio device is reinitialized, so the DAC never sees a step (PRD FR-16). */
+void wn_engine_fade_in(wn_engine *e);
 
 /* Writes `frames` interleaved stereo frames. Must not allocate, lock, log, or
  * perform I/O. Parameters are read once per buffer. */
@@ -29,7 +49,8 @@ void wn_engine_render(wn_engine *e, float *out, unsigned frames);
 
 int wn_engine_is_playing(const wn_engine *e);
 
-/* Observable state for status output and the IPC layer. */
+/* Observable state for status output and the IPC layer. Values are the
+ * requested state; during a fade the audible signal is still moving. */
 int wn_engine_noise(const wn_engine *e);
 int wn_engine_volume(const wn_engine *e);
 int wn_engine_is_mono(const wn_engine *e);
