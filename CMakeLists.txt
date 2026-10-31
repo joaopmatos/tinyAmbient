@@ -76,6 +76,18 @@ function(ta_warnings target)
     endif()
 endfunction()
 
+# MSVC compiles <stdatomic.h> only with an explicit opt-in: without
+# /experimental:c11atomics the header stops with "C atomic support is not
+# enabled". CMAKE_C_STANDARD 11 asks for /std:c11 but does not imply the atomic
+# flag, so both are set here for every target built from own code.
+function(ta_c11 target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE
+            /std:c11
+            /experimental:c11atomics)
+    endif()
+endfunction()
+
 # ASan/UBSan cover own code only. ta_audio contains the miniaudio implementation
 # and is deliberately left uninstrumented (AGENTS.md 1.5, PRD NFR-05). Linking an
 # uninstrumented TU into an instrumented binary is supported; it just means that
@@ -104,6 +116,7 @@ add_library(ta_core STATIC
     src/core/command.c)
 target_include_directories(ta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 ta_warnings(ta_core)
+ta_c11(ta_core)
 ta_sanitize(ta_core)
 ta_optimize(ta_core)
 
@@ -118,6 +131,7 @@ add_library(ta_ui STATIC
 target_link_libraries(ta_ui PUBLIC ta_core)
 target_compile_definitions(ta_ui PRIVATE TA_VERSION="${PROJECT_VERSION}")
 ta_warnings(ta_ui)
+ta_c11(ta_ui)
 ta_sanitize(ta_ui)
 ta_optimize(ta_ui)
 
@@ -129,6 +143,7 @@ target_include_directories(ta_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(ta_audio SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_link_libraries(ta_audio PUBLIC ta_core)
 ta_warnings(ta_audio)
+ta_c11(ta_audio)
 ta_optimize(ta_audio)
 
 # miniaudio needs libdl (to dlopen ALSA/Pulse), pthreads, and libm on Linux.
@@ -143,6 +158,7 @@ add_executable(tinyambient
     src/main.c)
 target_link_libraries(tinyambient PRIVATE ta_ui ta_core ta_audio)
 ta_warnings(tinyambient)
+ta_c11(tinyambient)
 ta_sanitize(tinyambient)
 ta_optimize(tinyambient)
 
@@ -172,11 +188,17 @@ add_custom_target(size-check
 
 enable_testing()
 
-add_test(NAME size
-    COMMAND ${CMAKE_COMMAND}
-        -DBINARY=$<TARGET_FILE:tinyambient>
-        -DLIMIT_KB=${TA_SIZE_LIMIT_KB}
-        -P ${TA_SIZE_SCRIPT})
+# The budget applies to the stripped Release binary. A sanitizer build links the
+# ASan/UBSan runtime, which alone pushes the file past 150 KB, so measuring it
+# would report a breach that says nothing about shipped code. The manual
+# size-check target stays available, but it too expects a Release configuration.
+if(NOT TA_SANITIZE)
+    add_test(NAME size
+        COMMAND ${CMAKE_COMMAND}
+            -DBINARY=$<TARGET_FILE:tinyambient>
+            -DLIMIT_KB=${TA_SIZE_LIMIT_KB}
+            -P ${TA_SIZE_SCRIPT})
+endif()
 
 # --- Unit tests --------------------------------------------------------------
 
@@ -184,6 +206,7 @@ function(ta_add_test name source)
     add_executable(${name} ${source})
     target_link_libraries(${name} PRIVATE ta_core)
     ta_warnings(${name})
+    ta_c11(${name})
     ta_sanitize(${name})
     ta_optimize(${name})
     if(TA_SANITIZE AND NOT MSVC)
@@ -201,6 +224,7 @@ add_executable(play_check tests/play_check.c)
 target_include_directories(play_check SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 target_link_libraries(play_check PRIVATE ta_audio)
 ta_warnings(play_check)
+ta_c11(play_check)
 ta_sanitize(play_check)
 ta_optimize(play_check)
 if(TA_SANITIZE AND NOT MSVC)

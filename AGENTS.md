@@ -207,13 +207,13 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 
 | Option | Default | Meaning |
 |---|---|---|
-| `TA_SANITIZE` | `OFF` | ASan + UBSan on own code. `audio/` stays uninstrumented (AGENTS 1.5). |
+| `TA_SANITIZE` | `OFF` | ASan + UBSan on own code. `audio/` stays uninstrumented (AGENTS 1.5). The `size` ctest entry is skipped in this configuration: the sanitizer runtime is part of the binary, so measuring it does not test the shipped artifact. |
 | `TA_REQUIRE_SPECTRUM` | `ON` | Fail configuration when Python3 is missing. A silently skipped FR-02 gate is worse than a missing one. |
 
 ### Per-OS notes
 
 - **Linux:** link dynamically against libc, load audio backends with `dlopen`. Do not attempt static musl plus ALSA.
-- **Windows:** `/MT` to avoid the VC++ Redistributable; `/O1 /GL /Gy /OPT:REF /OPT:ICF`.
+- **Windows:** `/MT` to avoid the VC++ Redistributable; `/O1 /GL /Gy /OPT:REF /OPT:ICF`. Own code needs `/std:c11 /experimental:c11atomics`: MSVC refuses `<stdatomic.h>` without the explicit atomic opt-in, and `CMAKE_C_STANDARD` alone does not add it.
 - **CI:** Ubuntu + Windows matrix, plus a third job that builds with ASan and UBSan (`-DTA_SANITIZE=ON`). Linux installs `alsa-lib-devel`/`libasound2-dev` and `libpulse-dev`. No runner has an audio device, so `audio/` is exercised through miniaudio's null backend (`TINYAMBIENT_AUDIO=null`) and everything else through offline renders.
 
 - **Sanitizers locally:** Fedora ships the sanitizer runtimes separately. `sudo dnf install libasan libubsan`, then configure with `-DTA_SANITIZE=ON`. Without those packages the build links but the binary cannot run.
