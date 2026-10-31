@@ -7,6 +7,8 @@
 #include "core/config.h"
 #include "core/engine.h"
 #include "core/noise.h"
+#include "platform/config_file.h"
+#include "platform/paths.h"
 
 /* Provided by CMake from the project version, so there is one source of truth
  * (PRD FR-15). */
@@ -27,17 +29,34 @@ void wn_cli_usage(void)
 {
     fputs("usage: tinyambient [command] [options]\n"
           "\n"
+          "commands:\n"
+          "  play | pause | toggle      control playback\n"
+          "  noise <white|pink|brown>   select the noise type\n"
+          "  volume <0-100>             set the volume\n"
+          "  stop-after <1-10080|off>   end the session after N minutes\n"
+          "  status                     print the current state\n"
+          "  quit                       stop the daemon\n"
+          "\n"
+          "options:\n"
+          "  --noise --volume --play --pause --toggle --stop-after\n"
+          "  --mono --stereo --status --quit\n"
+          "      the same commands in long-flag form\n"
+          "  --portable                 config.ini next to the executable\n"
+          "  --foreground               keep the daemon attached to the "
+          "terminal\n"
+          "\n"
           "render:\n"
-          "  --render <file>      offline 48 kHz stereo float32; a .wav\n"
-          "                       path adds a WAV header\n"
-          "  --noise <type>       white, pink, or brown; default white\n"
-          "  --seconds <1-3600>   render length, default "
-          "10\n"
-          "  --seed <n>           generator seed, default 1\n"
+          "  --render <file>            offline 48 kHz stereo float32; a .wav\n"
+          "                             path adds a WAV header\n"
+          "  --noise <type>             white, pink, or brown; default white\n"
+          "  --volume <0-100>           render volume, default 100\n"
+          "  --mono | --stereo          duplicate one channel; default stereo\n"
+          "  --seconds <1-3600>         render length, default 10\n"
+          "  --seed <n>                 generator seed, default 1\n"
           "\n"
           "other:\n"
-          "  --version            print version and exit\n"
-          "  --help               print this text and exit\n",
+          "  --version                  print version and exit\n"
+          "  --help                     print this text and exit\n",
           stdout);
 }
 
@@ -129,7 +148,7 @@ static void build_wav_header(unsigned char *header, uint32_t data_bytes)
 }
 
 static int render_file(const char *path, int seconds, uint64_t seed,
-                       int noise_type)
+                       int noise_type, int volume, int mono)
 {
     wn_config cfg;
     wn_engine *engine;
@@ -159,11 +178,12 @@ static int render_file(const char *path, int seconds, uint64_t seed,
         }
     }
 
-    /* Render uses full scale. There is no --volume at M2, and the calibrated
-     * type gain already targets -18 dBFS. */
+    /* Render defaults to full scale and stereo. `--volume` and
+     * `--mono`/`--stereo` select the same parameters a daemon would use, which
+     * is what makes FR-03 and FR-13 observable without a sound card. */
     cfg.noise = noise_type;
-    cfg.volume = 100;
-    cfg.mono = 0;
+    cfg.volume = volume;
+    cfg.mono = mono;
     cfg.fade_ms = 0;
 
     engine = wn_engine_create(&cfg);
@@ -202,57 +222,157 @@ static int render_file(const char *path, int seconds, uint64_t seed,
     return WN_EXIT_OK;
 }
 
+/* --- CLI modes ------------------------------------------------------------ */
+
+/* True when the token consumes the next argv element. Used by the precedence
+ * scan so that `--noise help` is a value, not a request for usage text. */
+static int takes_value(const char *name)
+{
+    return strcmp(name, "noise") == 0 || strcmp(name, "volume") == 0 ||
+           strcmp(name, "stop-after") == 0 || strcmp(name, "render") == 0 ||
+           strcmp(name, "seconds") == 0 || strcmp(name, "seed") == 0;
+}
+
+/* PRD section 7 rule 6: --help and --version take precedence over every other
+ * argument. The full parser runs afterwards; this pass only looks for the two
+ * tokens, skipping values so they are not mistaken for commands. */
+static void scan_precedence(int argc, const char *const *argv, int *want_help,
+                            int *want_version)
+{
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        const char *name;
+
+        if (arg == NULL) {
+            continue;
+        }
+        if (strcmp(arg, "--") == 0) {
+            break;
+        }
+
+        name = arg;
+        if (arg[0] == '-' && arg[1] == '-' && arg[2] != '\0') {
+            name = arg + 2;
+        } else if (arg[0] == '-') {
+            continue; /* a short option; the parser reports it */
+        }
+
+        if (strcmp(name, "help") == 0) {
+            *want_help = 1;
+        } else if (strcmp(name, "version") == 0) {
+            *want_version = 1;
+        }
+
+        if (takes_value(name) && i + 1 < argc) {
+            i++;
+        }
+    }
+}
+
+static int resolve_config_path(char *path, size_t cap, int portable)
+{
+    if (wn_paths_config_file(path, cap, portable) != 0) {
+        if (portable) {
+            wn_cli_error("cannot locate config.ini next to the executable");
+        } else {
+            wn_cli_error("cannot resolve the configuration directory");
+        }
+        return WN_EXIT_RUNTIME;
+    }
+    return WN_EXIT_OK;
+}
+
+static int load_config_file(const char *path, wn_config *cfg, char *text,
+                            size_t *text_len)
+{
+    char warn[160];
+    int result;
+
+    result = wn_config_file_load(path, cfg, text, WN_CONFIG_TEXT_MAX, text_len,
+                                 warn, sizeof(warn));
+    if (result != 0) {
+        wn_cli_error(warn[0] != '\0' ? warn : "cannot read the configuration");
+        return WN_EXIT_RUNTIME;
+    }
+    if (warn[0] != '\0') {
+        /* Malformed values never abort startup, but they are not silent. */
+        wn_cli_error(warn);
+    }
+
+    return WN_EXIT_OK;
+}
+
+static int save_config_file(const char *path, const wn_config *cfg,
+                            const char *original, int portable)
+{
+    char err[160];
+
+    if (wn_config_file_save(path, cfg, original, portable, err, sizeof(err)) !=
+        0) {
+        wn_cli_error(err[0] != '\0' ? err : "cannot write the configuration");
+        return WN_EXIT_RUNTIME;
+    }
+
+    return WN_EXIT_OK;
+}
+
+static void print_status(const wn_config *cfg)
+{
+    printf("version=%s\n", TA_VERSION);
+    printf("playing=0\n");
+    printf("noise=%s\n", wn_noise_type_name(cfg->noise));
+    printf("volume=%d\n", cfg->volume);
+    printf("mono=%d\n", cfg->mono != 0 ? 1 : 0);
+    printf("stop_after=off\n");
+}
+
+static void apply_persisted(wn_config *cfg, const wn_cmd *cmd)
+{
+    switch (cmd->kind) {
+        case WN_CMD_NOISE:
+            cfg->noise = cmd->ivalue;
+            break;
+        case WN_CMD_VOLUME:
+            cfg->volume = cmd->ivalue;
+            break;
+        case WN_CMD_MONO:
+            cfg->mono = 1;
+            break;
+        case WN_CMD_STEREO:
+            cfg->mono = 0;
+            break;
+        default:
+            break;
+    }
+}
+
 int wn_cli_main(int argc, const char *const *argv)
 {
     wn_cmd cmds[WN_CMD_MAX];
     char err[160];
+    char path[WN_PATH_MAX];
+    char text[WN_CONFIG_TEXT_MAX];
+    size_t text_len = 0;
     const char *render_path = NULL;
     int seconds = WN_RENDER_SECONDS_DEFAULT;
     int seed = WN_RENDER_SEED_DEFAULT;
     int noise_type = WN_NOISE_WHITE;
+    int volume = 100;
+    int mono = 0;
     int have_render = 0;
-    int have_render_option = 0;
+    int have_status = 0;
+    int have_persist = 0;
+    int have_session = 0;
+    int portable = 0;
     int want_help = 0;
     int want_version = 0;
+    int result;
     int n;
     int i;
 
-    n = wn_cmd_parse_argv(argc, argv, cmds, WN_CMD_MAX, err, sizeof(err));
-    if (n < 0) {
-        wn_cli_error(err);
-        return WN_EXIT_USAGE;
-    }
-
-    for (i = 0; i < n; i++) {
-        switch (cmds[i].kind) {
-            case WN_CMD_RENDER:
-                render_path = cmds[i].svalue;
-                have_render = 1;
-                break;
-            case WN_CMD_NOISE:
-                noise_type = cmds[i].ivalue;
-                have_render_option = 1;
-                break;
-            case WN_CMD_SECONDS:
-                seconds = cmds[i].ivalue;
-                have_render_option = 1;
-                break;
-            case WN_CMD_SEED:
-                seed = cmds[i].ivalue;
-                have_render_option = 1;
-                break;
-            case WN_CMD_VERSION:
-                want_version = 1;
-                break;
-            case WN_CMD_HELP:
-                want_help = 1;
-                break;
-            default:
-                break;
-        }
-    }
-
-    /* PRD section 7 rule 6: help and version win over every other argument. */
+    scan_precedence(argc, argv, &want_help, &want_version);
     if (want_help) {
         wn_cli_usage();
         return WN_EXIT_OK;
@@ -262,32 +382,115 @@ int wn_cli_main(int argc, const char *const *argv)
         return WN_EXIT_OK;
     }
 
-    if (have_render) {
-        /* PRD section 7 rule 3: render is offline-only. */
-        for (i = 0; i < n; i++) {
-            wn_cmd_kind kind = cmds[i].kind;
-
-            if (kind != WN_CMD_RENDER && kind != WN_CMD_SECONDS &&
-                kind != WN_CMD_SEED && kind != WN_CMD_NOISE) {
-                wn_cli_error("--render cannot be combined with other commands");
-                return WN_EXIT_USAGE;
-            }
-        }
-
-        return render_file(render_path, seconds, (uint64_t)seed, noise_type);
-    }
-
-    if (have_render_option) {
-        wn_cli_error("--noise, --seconds and --seed require --render");
+    n = wn_cmd_parse_argv(argc, argv, cmds, WN_CMD_MAX, err, sizeof(err));
+    if (n < 0) {
+        wn_cli_error(err);
         return WN_EXIT_USAGE;
     }
 
-    if (n > 0) {
-        wn_cli_error("this command is not implemented yet");
+    for (i = 0; i < n; i++) {
+        if (cmds[i].kind == WN_CMD_RENDER) {
+            have_render = 1;
+            render_path = cmds[i].svalue;
+        }
+    }
+
+    if (have_render) {
+        /* The parser has already rejected daemon commands next to --render. */
+        for (i = 0; i < n; i++) {
+            switch (cmds[i].kind) {
+                case WN_CMD_NOISE:
+                    noise_type = cmds[i].ivalue;
+                    break;
+                case WN_CMD_SECONDS:
+                    seconds = cmds[i].ivalue;
+                    break;
+                case WN_CMD_SEED:
+                    seed = cmds[i].ivalue;
+                    break;
+                case WN_CMD_VOLUME:
+                    volume = cmds[i].ivalue;
+                    break;
+                case WN_CMD_MONO:
+                    mono = 1;
+                    break;
+                case WN_CMD_STEREO:
+                    mono = 0;
+                    break;
+                default:
+                    break;
+            }
+        }
+        return render_file(render_path, seconds, (uint64_t)seed, noise_type,
+                           volume, mono);
+    }
+
+    for (i = 0; i < n; i++) {
+        switch (cmds[i].kind) {
+            case WN_CMD_STATUS:
+                have_status = 1;
+                break;
+            case WN_CMD_PORTABLE:
+                portable = 1;
+                break;
+            case WN_CMD_FOREGROUND:
+            case WN_CMD_PLAY:
+            case WN_CMD_PAUSE:
+            case WN_CMD_TOGGLE:
+            case WN_CMD_STOP_AFTER:
+            case WN_CMD_QUIT:
+                have_session = 1;
+                break;
+            case WN_CMD_NOISE:
+            case WN_CMD_VOLUME:
+            case WN_CMD_MONO:
+            case WN_CMD_STEREO:
+                have_persist = 1;
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (have_status) {
+        wn_config cfg;
+
+        result = resolve_config_path(path, sizeof(path), portable);
+        if (result != WN_EXIT_OK) {
+            return result;
+        }
+        result = load_config_file(path, &cfg, text, &text_len);
+        if (result != WN_EXIT_OK) {
+            return result;
+        }
+        print_status(&cfg);
+        return WN_EXIT_OK;
+    }
+
+    if (have_session || !have_persist) {
+        /* IPC and the daemon loop land in M7. Until then, session commands and
+         * a bare invocation have no process to talk to. */
+        wn_cli_error("daemon mode is not implemented yet");
         return WN_EXIT_RUNTIME;
     }
 
-    /* PRD FR-09: no arguments starts the daemon. That lands with IPC in M7. */
-    wn_cli_error("daemon mode is not implemented yet");
-    return WN_EXIT_RUNTIME;
+    {
+        wn_config cfg;
+
+        result = resolve_config_path(path, sizeof(path), portable);
+        if (result != WN_EXIT_OK) {
+            return result;
+        }
+        result = load_config_file(path, &cfg, text, &text_len);
+        if (result != WN_EXIT_OK) {
+            return result;
+        }
+
+        for (i = 0; i < n; i++) {
+            apply_persisted(&cfg, &cmds[i]);
+        }
+
+        return save_config_file(path, &cfg, text_len > 0 ? text : NULL,
+                                portable);
+    }
 }

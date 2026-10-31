@@ -7,9 +7,13 @@
 
 #include "core/noise.h"
 
-static int arg_is(const char *arg, const char *flag)
+/* One command line is at most WN_LINE_MAX bytes; the worst case is every
+ * command carrying a value, so two tokens per command is enough. */
+#define WN_TOKEN_MAX (WN_CMD_MAX * 2)
+
+static int arg_is(const char *arg, const char *name)
 {
-    return strcmp(arg, flag) == 0;
+    return strcmp(arg, name) == 0;
 }
 
 static void set_error(char *err, size_t cap, const char *fmt, ...)
@@ -23,6 +27,29 @@ static void set_error(char *err, size_t cap, const char *fmt, ...)
     va_start(args, fmt);
     (void)vsnprintf(err, cap, fmt, args);
     va_end(args);
+}
+
+/* Case-insensitive compare without <strings.h>: strcasecmp is POSIX, not C11,
+ * and core/ is restricted to the C11 standard library. */
+static int ascii_equal_ci(const char *a, const char *b)
+{
+    for (;;) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+
+        if (ca >= 'A' && ca <= 'Z') {
+            ca = (unsigned char)(ca - 'A' + 'a');
+        }
+        if (cb >= 'A' && cb <= 'Z') {
+            cb = (unsigned char)(cb - 'A' + 'a');
+        }
+        if (ca != cb) {
+            return 0;
+        }
+        if (ca == '\0') {
+            return 1;
+        }
+    }
 }
 
 /* Parses a decimal integer in [lo, hi]. Rejects trailing garbage, empty
@@ -63,152 +90,383 @@ static int emit(wn_cmd *out, int cap, int *count, wn_cmd_kind kind, int ivalue,
     return 0;
 }
 
-int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
-                      char *err, size_t err_cap)
+static int validate(const wn_cmd *cmds, int count, char *err, size_t err_cap)
 {
-    int count = 0;
+    int has_render = 0;
+    int has_status = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (cmds[i].kind == WN_CMD_RENDER) {
+            has_render = 1;
+        } else if (cmds[i].kind == WN_CMD_STATUS) {
+            has_status = 1;
+        }
+    }
+
+    if (has_render) {
+        /* PRD section 7 rule 3: render is offline-only. Help and version are
+         * allowed through so the caller can still honour rule 6. */
+        for (i = 0; i < count; i++) {
+            wn_cmd_kind kind = cmds[i].kind;
+
+            if (kind != WN_CMD_RENDER && kind != WN_CMD_SECONDS &&
+                kind != WN_CMD_SEED && kind != WN_CMD_NOISE &&
+                kind != WN_CMD_VOLUME && kind != WN_CMD_MONO &&
+                kind != WN_CMD_STEREO && kind != WN_CMD_HELP &&
+                kind != WN_CMD_VERSION) {
+                set_error(err, err_cap,
+                          "--render cannot be combined with other commands");
+                return -1;
+            }
+        }
+    } else {
+        for (i = 0; i < count; i++) {
+            if (cmds[i].kind == WN_CMD_SECONDS || cmds[i].kind == WN_CMD_SEED) {
+                set_error(err, err_cap,
+                          "--seconds and --seed require --render");
+                return -1;
+            }
+        }
+    }
+
+    if (has_status) {
+        /* PRD section 7 rule 4: status reports, it does not change anything. */
+        for (i = 0; i < count; i++) {
+            wn_cmd_kind kind = cmds[i].kind;
+
+            if (kind == WN_CMD_PLAY || kind == WN_CMD_PAUSE ||
+                kind == WN_CMD_TOGGLE || kind == WN_CMD_NOISE ||
+                kind == WN_CMD_VOLUME || kind == WN_CMD_STOP_AFTER ||
+                kind == WN_CMD_MONO || kind == WN_CMD_STEREO ||
+                kind == WN_CMD_QUIT || kind == WN_CMD_RENDER) {
+                set_error(err, err_cap,
+                          "--status cannot be combined with other commands");
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/* Parses `count` tokens. bare words and "--" flags are equivalent. Tokens
+ * starting with a single '-' are rejected: v1 has no short options. */
+static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
+                        char *err, size_t err_cap)
+{
+    int n = 0;
     int seen_render = 0;
     int seen_noise = 0;
+    int seen_volume = 0;
+    int seen_stop_after = 0;
     int seen_seconds = 0;
     int seen_seed = 0;
-    int i;
+    int i = 0;
 
     if (out == NULL || cap <= 0) {
         set_error(err, err_cap, "internal: no command buffer");
         return -1;
     }
 
-    /* argv[0] is the program name. */
-    for (i = 1; i < argc; i++) {
-        const char *arg = argv[i];
+    while (i < count) {
+        const char *arg = tok[i];
+        const char *name = arg;
+        const char *value = NULL;
 
-        if (arg == NULL) {
-            continue;
-        }
-
-        if (arg[0] != '-') {
-            set_error(err, err_cap, "unknown command '%s'", arg);
+        if (arg == NULL || arg[0] == '\0') {
+            set_error(err, err_cap, "empty command");
             return -1;
         }
 
-        if (arg[1] != '-') {
-            set_error(err, err_cap, "unknown option '%s'", arg);
-            return -1;
-        }
-
-        if (arg[2] == '\0') {
-            /* Bare "--" ends option parsing. v1 has no positional arguments, so
-             * anything after it is an error rather than silently ignored. */
-            if (i + 1 < argc) {
-                set_error(err, err_cap, "unexpected argument '%s'",
-                          argv[i + 1]);
+        if (arg[0] == '-') {
+            if (arg[1] != '-') {
+                set_error(err, err_cap, "unknown option '%s'", arg);
                 return -1;
             }
-            break;
+            if (arg[2] == '\0') {
+                /* Bare "--" ends option parsing. v1 has no positional
+                 * arguments, so anything after it is an error rather than
+                 * silently ignored. */
+                if (i + 1 < count) {
+                    set_error(err, err_cap, "unexpected argument '%s'",
+                              tok[i + 1]);
+                    return -1;
+                }
+                break;
+            }
+            name = arg + 2;
         }
 
-        if (arg_is(arg, "--render")) {
-            if (i + 1 >= argc) {
-                set_error(err, err_cap, "option '--render' requires a path");
+        if (arg_is(name, "render")) {
+            if (i + 1 >= count) {
+                set_error(err, err_cap, "'%s' requires a path", arg);
                 return -1;
             }
             if (seen_render) {
-                set_error(err, err_cap,
-                          "option '--render' given more than once");
+                set_error(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_render = 1;
-            i++;
-            if (emit(out, cap, &count, WN_CMD_RENDER, 0, argv[i], err,
-                     err_cap) != 0) {
+            value = tok[i + 1];
+            if (emit(out, cap, &n, WN_CMD_RENDER, 0, value, err, err_cap) !=
+                0) {
                 return -1;
             }
-        } else if (arg_is(arg, "--noise")) {
+            i += 2;
+        } else if (arg_is(name, "noise")) {
             int type;
 
-            if (i + 1 >= argc) {
-                set_error(err, err_cap, "option '--noise' requires a value");
+            if (i + 1 >= count) {
+                set_error(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_noise) {
-                set_error(err, err_cap,
-                          "option '--noise' given more than once");
-                return -1;
-            }
-            i++;
-            type = wn_noise_type_parse(argv[i]);
-            if (type == WN_NOISE_NONE) {
-                set_error(err, err_cap,
-                          "'%s' is not a noise type (white, pink, brown)",
-                          argv[i]);
+                set_error(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_noise = 1;
-            if (emit(out, cap, &count, WN_CMD_NOISE, type,
-                     wn_noise_type_name(type), err, err_cap) != 0) {
+            value = tok[i + 1];
+            type = wn_noise_type_parse(value);
+            if (type == WN_NOISE_NONE) {
+                set_error(err, err_cap,
+                          "'%s' is not a noise type (white, pink, brown)",
+                          value);
                 return -1;
             }
-        } else if (arg_is(arg, "--seconds")) {
-            int value;
-            if (i + 1 >= argc) {
-                set_error(err, err_cap, "option '--seconds' requires a value");
+            if (emit(out, cap, &n, WN_CMD_NOISE, type, wn_noise_type_name(type),
+                     err, err_cap) != 0) {
+                return -1;
+            }
+            i += 2;
+        } else if (arg_is(name, "volume")) {
+            int volume;
+
+            if (i + 1 >= count) {
+                set_error(err, err_cap, "'%s' requires a value", arg);
+                return -1;
+            }
+            if (seen_volume) {
+                set_error(err, err_cap, "'%s' given more than once", arg);
+                return -1;
+            }
+            seen_volume = 1;
+            value = tok[i + 1];
+            if (parse_int(value, 0, 100, &volume) != 0) {
+                set_error(err, err_cap, "'%s' is not a valid volume (0-100)",
+                          value);
+                return -1;
+            }
+            if (emit(out, cap, &n, WN_CMD_VOLUME, volume, NULL, err, err_cap) !=
+                0) {
+                return -1;
+            }
+            i += 2;
+        } else if (arg_is(name, "stop-after")) {
+            int minutes = WN_STOP_AFTER_OFF;
+
+            if (i + 1 >= count) {
+                set_error(err, err_cap, "'%s' requires a value", arg);
+                return -1;
+            }
+            if (seen_stop_after) {
+                set_error(err, err_cap, "'%s' given more than once", arg);
+                return -1;
+            }
+            seen_stop_after = 1;
+            value = tok[i + 1];
+            if (!ascii_equal_ci(value, "off") &&
+                parse_int(value, WN_STOP_AFTER_MIN, WN_STOP_AFTER_MAX,
+                          &minutes) != 0) {
+                set_error(err, err_cap,
+                          "'%s' is not a valid stop-after value (1-%d or off)",
+                          value, WN_STOP_AFTER_MAX);
+                return -1;
+            }
+            if (emit(out, cap, &n, WN_CMD_STOP_AFTER, minutes, NULL, err,
+                     err_cap) != 0) {
+                return -1;
+            }
+            i += 2;
+        } else if (arg_is(name, "seconds")) {
+            int seconds;
+
+            if (i + 1 >= count) {
+                set_error(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_seconds) {
-                set_error(err, err_cap,
-                          "option '--seconds' given more than once");
-                return -1;
-            }
-            i++;
-            if (parse_int(argv[i], WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX,
-                          &value) != 0) {
-                set_error(
-                    err, err_cap, "'%s' is not a valid --seconds value (%d-%d)",
-                    argv[i], WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX);
+                set_error(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_seconds = 1;
-            if (emit(out, cap, &count, WN_CMD_SECONDS, value, NULL, err,
+            value = tok[i + 1];
+            if (parse_int(value, WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX,
+                          &seconds) != 0) {
+                set_error(err, err_cap,
+                          "'%s' is not a valid seconds value (%d-%d)", value,
+                          WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX);
+                return -1;
+            }
+            if (emit(out, cap, &n, WN_CMD_SECONDS, seconds, NULL, err,
                      err_cap) != 0) {
                 return -1;
             }
-        } else if (arg_is(arg, "--seed")) {
-            int value;
-            if (i + 1 >= argc) {
-                set_error(err, err_cap, "option '--seed' requires a value");
+            i += 2;
+        } else if (arg_is(name, "seed")) {
+            int seed;
+
+            if (i + 1 >= count) {
+                set_error(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_seed) {
-                set_error(err, err_cap, "option '--seed' given more than once");
-                return -1;
-            }
-            i++;
-            if (parse_int(argv[i], 0, 2147483647L, &value) != 0) {
-                set_error(err, err_cap,
-                          "'%s' is not a valid --seed value (0-2147483647)",
-                          argv[i]);
-                return -1;
-            }
-            if (emit(out, cap, &count, WN_CMD_SEED, value, NULL, err,
-                     err_cap) != 0) {
+                set_error(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_seed = 1;
-        } else if (arg_is(arg, "--version")) {
-            if (emit(out, cap, &count, WN_CMD_VERSION, 0, NULL, err, err_cap) !=
+            value = tok[i + 1];
+            if (parse_int(value, 0, 2147483647L, &seed) != 0) {
+                set_error(err, err_cap,
+                          "'%s' is not a valid seed value (0-2147483647)",
+                          value);
+                return -1;
+            }
+            if (emit(out, cap, &n, WN_CMD_SEED, seed, NULL, err, err_cap) !=
                 0) {
                 return -1;
             }
-        } else if (arg_is(arg, "--help")) {
-            if (emit(out, cap, &count, WN_CMD_HELP, 0, NULL, err, err_cap) !=
+            i += 2;
+        } else if (arg_is(name, "play")) {
+            if (emit(out, cap, &n, WN_CMD_PLAY, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "pause")) {
+            if (emit(out, cap, &n, WN_CMD_PAUSE, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "toggle")) {
+            if (emit(out, cap, &n, WN_CMD_TOGGLE, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "mono")) {
+            if (emit(out, cap, &n, WN_CMD_MONO, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "stereo")) {
+            if (emit(out, cap, &n, WN_CMD_STEREO, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "status")) {
+            if (emit(out, cap, &n, WN_CMD_STATUS, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "portable")) {
+            if (emit(out, cap, &n, WN_CMD_PORTABLE, 0, NULL, err, err_cap) !=
                 0) {
                 return -1;
             }
+            i++;
+        } else if (arg_is(name, "foreground")) {
+            if (emit(out, cap, &n, WN_CMD_FOREGROUND, 0, NULL, err, err_cap) !=
+                0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "version")) {
+            if (emit(out, cap, &n, WN_CMD_VERSION, 0, NULL, err, err_cap) !=
+                0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "help")) {
+            if (emit(out, cap, &n, WN_CMD_HELP, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
+        } else if (arg_is(name, "quit")) {
+            if (emit(out, cap, &n, WN_CMD_QUIT, 0, NULL, err, err_cap) != 0) {
+                return -1;
+            }
+            i++;
         } else {
-            set_error(err, err_cap, "unknown option '%s'", arg);
+            if (arg[0] == '-') {
+                set_error(err, err_cap, "unknown option '%s'", arg);
+            } else {
+                set_error(err, err_cap, "unknown command '%s'", arg);
+            }
             return -1;
         }
     }
 
-    return count;
+    if (validate(out, n, err, err_cap) != 0) {
+        return -1;
+    }
+
+    return n;
+}
+
+int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
+                      char *err, size_t err_cap)
+{
+    if (argv == NULL || argc < 1) {
+        return 0;
+    }
+
+    /* argv[0] is the program name. */
+    return parse_tokens(argv + 1, argc - 1, out, cap, err, err_cap);
+}
+
+int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
+                      size_t err_cap)
+{
+    const char *tok[WN_TOKEN_MAX];
+    int count = 0;
+    char *p;
+
+    if (line == NULL) {
+        set_error(err, err_cap, "empty command");
+        return -1;
+    }
+    if (strlen(line) >= WN_LINE_MAX) {
+        set_error(err, err_cap, "command line is too long");
+        return -1;
+    }
+
+    p = line;
+    while (*p != '\0') {
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        if (count >= WN_TOKEN_MAX) {
+            set_error(err, err_cap, "too many arguments");
+            return -1;
+        }
+
+        tok[count++] = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\r' &&
+               *p != '\n') {
+            p++;
+        }
+        if (*p != '\0') {
+            *p = '\0';
+            p++;
+        }
+    }
+
+    if (count == 0) {
+        set_error(err, err_cap, "empty command");
+        return -1;
+    }
+
+    return parse_tokens(tok, count, out, cap, err, err_cap);
 }

@@ -37,7 +37,8 @@ typedef enum {
     WN_CMD_NONE, WN_CMD_PLAY, WN_CMD_PAUSE, WN_CMD_TOGGLE,
     WN_CMD_NOISE, WN_CMD_VOLUME, WN_CMD_STOP_AFTER,
     WN_CMD_MONO, WN_CMD_STEREO, WN_CMD_STATUS,
-    WN_CMD_RENDER, WN_CMD_PORTABLE, WN_CMD_FOREGROUND,
+    WN_CMD_RENDER, WN_CMD_SECONDS, WN_CMD_SEED,
+    WN_CMD_PORTABLE, WN_CMD_FOREGROUND,
     WN_CMD_VERSION, WN_CMD_HELP, WN_CMD_QUIT
 } wn_cmd_kind;
 
@@ -50,12 +51,23 @@ typedef struct {
 
 Contract:
 
-- Returns commands in written order, or an error with an invalid `kind` and a message.
-- Treats bare words and long flags as equivalent.
-- Rejects the combinations listed in PRD section 7 (render with daemon commands, status with content commands).
-- Validates syntax plus the ranges it can check locally: `volume` and `noise`.
+- Returns commands in written order, or -1 with a message in `err`.
+- Treats bare words and long flags as equivalent: `noise pink`, `--noise pink`,
+  `play`, and `--play` all parse the same way.
+- Rejects the combinations listed in PRD section 7 (render with daemon
+  commands, status with content commands, seconds or seed without render).
+- Validates syntax plus the ranges it can check locally: `volume` 0–100,
+  `stop-after` 1–10080 or `off`, `seconds` 1–3600, `seed` 0–2147483647, and
+  the three noise names.
+- Repeating a single-valued option (`--noise`, `--volume`, `--stop-after`,
+  `--render`, `--seconds`, `--seed`) is an error. Play/pause/toggle and
+  mono/stereo may appear together; the last one wins, as rule 2 requires.
+- `wn_cmd_parse_line` splits a mutable buffer in place. `svalue` may point into
+  that buffer, so the caller keeps it alive while applying the commands.
 
-The mapping to IPC text (`noise pink`, `volume 40`) and the inverse parser live here, so there is only one semantics.
+The mapping to IPC text (`noise pink`, `volume 40`) and the inverse parser live
+here, so there is only one semantics. `wn_engine_command` uses the line parser
+rather than re-implementing a command subset.
 
 `wn_engine_command` returns 0 on success and non-zero for an unknown or invalid command, so the IPC layer can answer with an error instead of `ok`.
 
@@ -81,13 +93,22 @@ size_t wn_config_format(const wn_config *cfg, const char *original,
 ```
 
 - Keys under `[general]`: `noise`, `volume`, `mono`, `fade_ms`.
-- Unknown keys survive a rewrite.
-- Malformed values fall back to defaults with a warning; they never abort startup.
-- `fade_ms` is clamped to 0-2000 on read.
+- Parsing starts from defaults, so a missing key keeps its default. Section and
+  key names are trimmed and compared case-insensitively; `#` and `;` start a
+  comment line.
+- Unknown keys survive a rewrite. Unknown keys under `[general]` are emitted
+  after the four canonical keys, before any other section, so they cannot drift
+  into the section that follows them. Unknown sections are preserved after the
+  canonical block.
+- Malformed values fall back to the default for that key with a warning; they
+  never abort startup. The first warning is kept.
+- `volume` is range-checked. `fade_ms` is clamped to 0-2000 on read.
 - `wn_config_format` uses `snprintf` semantics: it returns the byte count the
-  full text needs, so a value `>= cap` signals truncation.
+  full text needs, so a value `>= cap` signals truncation. With `out == NULL`
+  and `cap == 0` it only measures.
 
-The atomic write (temp file + `fsync` + `rename`) lives in the layer that owns I/O, not here.
+The atomic write (temp file + `fsync` + `rename`) lives in the layer that owns
+I/O, not here; see `platform/config_file.c` below.
 
 ---
 
@@ -138,23 +159,34 @@ what makes the PRD targets 0, -3, and -6 dB/oct rather than 3, 0, and -3.
 
 ## 5. `core/engine.c`
 
-Owns observable state and applies fades. It is the only thing the callback calls.
+Owns observable state and, from M6, applies fades. It is the only thing the
+callback calls.
 
-Internal state:
+Internal state at M5:
 
-- two `wn_noise` instances (left/right), or one when `mono` is set;
-- current and target gain (linear volume) with a 20 ms ramp;
-- crossfade pair: old and new type, progress in samples, duration `fade_ms`;
-- `playing` and the stop-after deadline.
+- two `wn_noise` instances (left/right), or one generator duplicated when
+  `mono` is set;
+- `type`, `volume`, `mono`, and `playing`;
+- an atomic `frames_rendered` counter for diagnostics.
 
-Behavior:
+`wn_engine_command` parses a line with `wn_cmd_parse_line` and applies every
+command only after the whole line is known to be supported, so an invalid tail
+cannot leave the engine half-applied. It accepts `noise`, `volume`, `play`,
+`pause`, `toggle`, `mono`, and `stereo`. Status, quit, and stop-after belong to
+the daemon loop, not the engine.
 
-- Reads atomics once at the start of each buffer, never mid-sample-loop.
-- `volume 0` produces silence with `playing=1`; generation continues.
-- A type change crossfades over `fade_ms`, with no gap and no discontinuity.
-- Stop-after fade-out lasts 20 s; at the end `playing=0` and the daemon keeps running.
-- Startup and quit use a short fade to avoid pops.
+Behavior at M5:
+
+- Parameter changes are immediate. M6 turns the fields into atomics read once
+  per buffer and adds the 20 ms volume fade and the `fade_ms` crossfade.
+- `volume 0` produces silence with `playing=1`; generation continues, so filter
+  state and RNG progress do not depend on the volume.
+- A paused engine writes silence and does not generate. M6 replaces the abrupt
+  stop with a fade.
 - The output buffer is always fully written, including during silence.
+- `wn_engine_noise`, `wn_engine_volume`, `wn_engine_is_mono`, and
+  `wn_engine_is_playing` expose the state for status output. The stop-after
+  deadline stays on the main thread and is not engine state.
 
 `wn_engine_set_seed` reseeds both generators (streams stay 0 and 1). Only
 `--render` uses it, because there the output must depend on the seed alone
@@ -192,14 +224,42 @@ Resolves the config directory. The only place that touches `getenv`, `HOME`, or 
 | Linux | `$XDG_CONFIG_HOME/tinyambient/config.ini`, fallback `~/.config/tinyambient/config.ini` |
 | Windows | `%APPDATA%\tinyAmbient\config.ini` |
 
-- `--portable` replaces this with `config.ini` next to the executable.
-- Returns fixed buffers built with `snprintf`; explicit error if the path does not fit.
-- In portable mode, verify the directory is writable and fail with a clear message otherwise.
-- Create the parent directory if missing, mode `0700`.
+- `--portable` replaces this with `config.ini` next to the executable. Linux
+  resolves the executable through `/proc/self/exe`; Windows uses
+  `GetModuleFileNameA`.
+- Returns fixed buffers built with `snprintf`; explicit error if the path does
+  not fit.
+- Non-portable saves create missing parent directories with mode `0700`.
+- Portable mode never creates the executable's directory. The atomic write then
+  fails with a clear message when that directory is not writable.
+- `wn_paths_ipc_address` lands with IPC in M7.
 
 ---
 
-## 8. `platform/ipc.c`
+## 8. `platform/config_file.c`
+
+File I/O for the INI configuration. The parser and formatter stay in `core/`;
+this module owns the path-dependent parts.
+
+- `wn_config_file_load` reads at most `WN_CONFIG_TEXT_MAX` (8192) bytes. A
+  missing file is not an error: defaults are used and the original text is
+  empty. A larger file is parsed up to the cap and reports a warning.
+- Warnings about malformed values are passed through from `core/config.c`.
+  They never abort startup.
+- `wn_config_file_save` formats the configuration, preserving unknown keys and
+  sections from the original text, then writes atomically:
+  1. create a temporary file in the same directory (`mkstemp` on POSIX,
+     `path.tmp.<pid>` on Windows);
+  2. `fwrite`, `fflush`, `fsync` (`_commit` on Windows);
+  3. `rename` (`MoveFileExA` with replace on Windows);
+  4. remove the temporary file on any failure.
+- POSIX temporary files are created with mode `0600`, and the rename preserves
+  that mode, so the configuration is never group- or world-readable.
+- No temporary file survives a failed save.
+
+---
+
+## 9. `platform/ipc.c`
 
 | OS | Address | Permissions |
 |---|---|---|
@@ -223,18 +283,29 @@ Details:
 
 ---
 
-## 9. `ui/cli.c`
+## 10. `ui/cli.c`
 
-Turns `argv` into `wn_cmd` through `core/command.c` and formats output. Flags and precedence rules live in PRD section 7; do not duplicate them here.
+Turns `argv` into `wn_cmd` through `core/command.c` and formats output. Flags and
+precedence rules live in PRD section 7; do not duplicate them here.
 
-- `--status` prints exactly the six lines from PRD section 6, FR-08, in order.
-- `--help` and `--version` take precedence over everything.
+- A prescan honours `--help` and `--version` before the full parse, so they win
+  over an otherwise invalid argument list. The prescan skips the value of a
+  value-taking option (`--noise help` is a bad noise name, not a help request).
+- `--status` prints exactly the six lines from PRD section 6, FR-08, in order,
+  followed by one newline each. At M5 there is no daemon, so it always reports
+  the no-daemon form: `playing=0`, `stop_after=off`, and the persisted settings.
+  M7 inserts the IPC query ahead of this fallback.
+- Setting commands (`noise`, `volume`, `mono`, `stereo`) load the file, apply in
+  written order, and save once. `--portable` changes the path, nothing else.
+- `--render` neither reads nor writes configuration.
+- Playback and timer commands are session state. Until M7 gives them a daemon
+  to talk to, they exit 1 with a diagnostic; they never write configuration.
 - Errors go to `stderr` prefixed with `tinyambient: `.
 - Exit codes: 0 success, 1 runtime failure, 2 usage error, 3 IPC failure.
 
 ---
 
-## 10. `main.c` and `--render`
+## 11. `main.c` and `--render`
 
 `main.c` only wires things together:
 
@@ -246,7 +317,11 @@ parse argv -> config load -> decide mode
   +- no args  -> start daemon if absent, then exit
 ```
 
-`--render` starts no daemon, opens no device, and writes no config. It uses the same `wn_engine_render` with an explicit seed so output matches playback.
+`--render` starts no daemon, opens no device, and reads and writes no config. It
+uses the same `wn_engine_render` with an explicit seed so output matches
+playback. Noise, volume, and mono are taken from the command line, never from
+the saved configuration: white, 100, and stereo when the flags are absent. That
+keeps a render reproducible from the arguments alone (NFR-06).
 
 Block size is 512 frames, matching the planned device period, so the render loop and the audio callback have the same shape.
 
@@ -262,7 +337,7 @@ At the 3600 s limit the data chunk is 1,382,400,000 bytes, which still fits the
 
 ---
 
-## 11. Invariants to test
+## 12. Invariants to test
 
 1. Same seed and parameters produce byte-identical output.
 2. No sample outside `[-1.0, 1.0]`.
@@ -271,3 +346,10 @@ At the 3600 s limit the data chunk is 1,382,400,000 bytes, which still fits the
 5. A config write killed mid-flight leaves a parseable file.
 6. A second invocation creates no second daemon and returns in under 100 ms.
 7. `--status` follows the format and values of FR-08, with and without a daemon.
+8. Malformed config values fall back to defaults with a warning and no abort.
+9. Unknown keys and sections survive a rewrite.
+10. `--status` and `--render` never write configuration; usage errors never
+    rewrite it either.
+11. `--portable` writes `config.ini` next to the executable and ignores
+    `XDG_CONFIG_HOME`/`APPDATA`.
+12. A saved config is mode `0600` and leaves no temporary file behind.

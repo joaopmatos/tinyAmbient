@@ -4,11 +4,8 @@
 #include <stddef.h>
 
 /* Single parser for argv and IPC lines. Knows nothing about sockets, files, or
- * stdout. Bare words and long flags are equivalent.
- *
- * M1 recognizes --render, --seconds, --seed, --version, --help. The remaining
- * kinds are declared now because the enum is the parser's contract, but they
- * are rejected as unknown until their flag lands. */
+ * stdout. Bare words and long flags are equivalent, so `noise pink` and
+ * `--noise pink` produce the same command. */
 typedef enum {
     WN_CMD_NONE = 0,
     WN_CMD_PLAY,
@@ -48,13 +45,22 @@ typedef struct {
 #define WN_RENDER_SECONDS_MIN 1
 #define WN_RENDER_SECONDS_MAX 3600
 
+/* Stop-after is session state in minutes. `off` cancels it. One week is the
+ * upper bound: the timer exists to bound a work session, not a machine uptime. */
+#define WN_STOP_AFTER_OFF (-1)
+#define WN_STOP_AFTER_MIN 1
+#define WN_STOP_AFTER_MAX 10080
+
 /* Parses one argv-style token list. Returns the number of commands written to
  * `out`, or -1 on a usage error with a message in `err`. */
 int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
                       char *err, size_t err_cap);
 
-/* Parses one newline-terminated IPC line without the terminator. Lands in M7. */
-int wn_cmd_parse_line(const char *line, wn_cmd *out, int cap, char *err,
+/* Parses one command line without the terminator. The buffer is modified in
+ * place: tokens are separated with NUL bytes, and `svalue` may point into it.
+ * The caller must keep `line` alive while it uses the results. Returns the
+ * number of commands, or -1 with a message in `err`. */
+int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
                       size_t err_cap);
 
 #endif /* WN_CORE_COMMAND_H */

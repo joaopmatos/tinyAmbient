@@ -100,7 +100,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 
 **FR-04 Noise switching.** Changing type crossfades over `fade_ms` (default 250). No discontinuity, no clipping, no gap.
 
-**FR-05 Session auto-stop.** `--stop-after <minutes>` starts a countdown from the moment the command is applied. `--stop-after off` cancels it. At expiry, playback fades out over 20 s and pauses; the daemon stays alive. The timer bounds a work session; it is session state and is never written to configuration.
+**FR-05 Session auto-stop.** `--stop-after <minutes>` starts a countdown from the moment the command is applied; minutes are an integer from 1 to 10080 (one week). `--stop-after off` cancels it. At expiry, playback fades out over 20 s and pauses; the daemon stays alive. The timer bounds a work session; it is session state and is never written to configuration.
 
 **FR-06 Config persistence.** Commands that change a persisted setting (`noise`, `volume`, `mono`, `stereo`) apply to the daemon and write configuration. Playback commands (`play`, `pause`, `toggle`) and `stop-after` change session state only and never write. Writes are atomic: temporary file in the target directory, `fsync`, `rename`. `--status`, `--render`, `--help`, and `--version` never write.
 
@@ -121,7 +121,7 @@ stop_after=off
 
 **FR-09 No-argument start.** `tinyambient` with no arguments starts the daemon if absent, plays the saved noise at the saved volume, and exits 0. First sample is audible within 200 ms.
 
-**FR-10 Offline render.** `--render <file>` writes 48 kHz stereo float32 without opening an audio device and without contacting the daemon. A `.wav` extension produces a WAV container; any other extension produces raw little-endian float32 interleaved. `--seconds N` defaults to 10 and accepts 1–3600. `--seed N` defaults to 1. Byte count is `48000 * 2 * 4 * N`.
+**FR-10 Offline render.** `--render <file>` writes 48 kHz stereo float32 without opening an audio device and without contacting the daemon. A `.wav` extension produces a WAV container; any other extension produces raw little-endian float32 interleaved. `--seconds N` defaults to 10 and accepts 1–3600. `--seed N` defaults to 1. `--noise`, `--volume`, and `--mono`/`--stereo` select the same parameters a daemon would use; the render defaults are white, volume 100, and stereo. Byte count is `48000 * 2 * 4 * N`.
 
 **FR-11 Portable mode.** `--portable` reads and writes `config.ini` next to the executable instead of the per-OS configuration directory.
 
@@ -144,7 +144,7 @@ Commands
   play | pause | toggle
   noise <white|pink|brown>
   volume <0-100>
-  stop-after <minutes|off>
+  stop-after <1-10080|off>
   status
   quit
 
@@ -156,7 +156,8 @@ Options
   --status
   --quit
   --mono | --stereo
-  --render <file> [--seconds N] [--seed N]
+  --render <file> [--seconds N] [--seed N] [--noise T] [--volume N]
+                   [--mono | --stereo]
   --portable
   --foreground
   --version
@@ -167,7 +168,7 @@ Rules:
 
 1. Bare words and long flags are equivalent. `tinyambient noise pink` and `tinyambient --noise pink` behave identically.
 2. Multiple content flags in one invocation apply in the order written.
-3. `--render` implies offline mode. Combining `--render` with daemon commands is a usage error (exit 2).
+3. `--render` implies offline mode. Combining `--render` with playback, timer, status, quit, portable, or foreground commands is a usage error (exit 2). `--noise`, `--volume`, and `--mono`/`--stereo` act as render parameters in this mode.
 4. Combining `--status` with content flags is a usage error (exit 2).
 5. Unknown flags, unknown noise names, and out-of-range values exit 2 with a one-line message.
 6. `--help` and `--version` take precedence over all other arguments.

@@ -65,6 +65,28 @@ if(result EQUAL 0)
     message(FATAL_ERROR "render_check: seed change had no effect")
 endif()
 
+# --- Volume 0 is exact silence (PRD FR-03) ----------------------------------
+
+set(SILENT "${WORKDIR}/render_check_silent.raw")
+execute_process(
+    COMMAND "${BINARY}" --render "${SILENT}" --seconds 1 --volume 0
+    RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "render_check: volume-0 render failed with ${result}")
+endif()
+
+file(SIZE "${SILENT}" silent_size)
+if(NOT silent_size EQUAL 384000)
+    message(FATAL_ERROR
+        "render_check: volume-0 render is ${silent_size} bytes, expected 384000")
+endif()
+
+file(READ "${SILENT}" silent_hex HEX)
+if(NOT silent_hex MATCHES "^0+$")
+    message(FATAL_ERROR
+        "render_check: volume 0 produced a non-zero sample")
+endif()
+
 # --- WAV container (PRD FR-10) ----------------------------------------------
 
 set(WAV "${WORKDIR}/render_check.wav")

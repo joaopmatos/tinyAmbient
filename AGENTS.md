@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M4 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, parser, spectrum and playback tests. No IPC, no daemon, no config file.
+**State:** M5 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, and the corresponding CLI, config, and engine tests. No IPC, no daemon, no fades or auto-stop yet.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -52,6 +52,7 @@ src/
     device.c             # only file that includes miniaudio
   platform/
     paths.c  paths.h     # per-OS config directories
+    config_file.c .h     # load, atomic save (temp + fsync + rename)
     ipc.c    ipc.h       # Unix socket / named pipe
   ui/
     cli.c                # flags, output, exit codes
@@ -59,6 +60,7 @@ tests/
   test_noise.c
   test_config.c
   test_command.c
+  test_engine.c
   check_spectrum.py      # slopes/RMS over raw or WAV
 third_party/
   miniaudio.h
@@ -189,8 +191,11 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | M3 | M2 + WAV container and its header checks | 11 KB | 150 KB |
 | M4 | M3 + miniaudio device and callback (product binary, unreachable until M7) | 15 KB | 150 KB |
 | M4 | `play_check` harness, which actually opens the device | 91 KB | — |
+| M5 | M4 + full parser, engine commands, INI config, atomic writes, portable mode, status | 23 KB | 150 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
+
+M5 note: the file grew from 15,248 to 23,608 bytes (+8,360). `.text` is 15,529 bytes, `.data` 800, `.bss` 48. The cost is the full command parser, the INI parser/formatter, paths, the atomic writer, and the CLI status/persistence paths. The number is still an order of magnitude under the budget.
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 

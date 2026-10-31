@@ -71,6 +71,11 @@ endfunction()
 function(ta_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
+        # C4996 flags every ISO C CRT call (fopen, sscanf) as deprecated in
+        # favour of Annex K, which glibc does not implement. Keeping the
+        # portable calls means the same source is exercised on both platforms;
+        # AGENTS.md 5 already bans the genuinely unsafe ones (strcpy, sprintf).
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
@@ -113,7 +118,8 @@ endfunction()
 add_library(ta_core STATIC
     src/core/noise.c
     src/core/engine.c
-    src/core/command.c)
+    src/core/command.c
+    src/core/config.c)
 target_include_directories(ta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 ta_warnings(ta_core)
 ta_c11(ta_core)
@@ -126,9 +132,20 @@ if(UNIX)
     target_link_libraries(ta_core PUBLIC m)
 endif()
 
+# platform/ owns every OS API. core/ stays portable, so the config parser and
+# formatter live there and the atomic write lives here.
+add_library(ta_platform STATIC
+    src/platform/paths.c
+    src/platform/config_file.c)
+target_link_libraries(ta_platform PUBLIC ta_core)
+ta_warnings(ta_platform)
+ta_c11(ta_platform)
+ta_sanitize(ta_platform)
+ta_optimize(ta_platform)
+
 add_library(ta_ui STATIC
     src/ui/cli.c)
-target_link_libraries(ta_ui PUBLIC ta_core)
+target_link_libraries(ta_ui PUBLIC ta_core ta_platform)
 target_compile_definitions(ta_ui PRIVATE TA_VERSION="${PROJECT_VERSION}")
 ta_warnings(ta_ui)
 ta_c11(ta_ui)
@@ -156,7 +173,7 @@ endif()
 
 add_executable(tinyambient
     src/main.c)
-target_link_libraries(tinyambient PRIVATE ta_ui ta_core ta_audio)
+target_link_libraries(tinyambient PRIVATE ta_ui ta_platform ta_core ta_audio)
 ta_warnings(tinyambient)
 ta_c11(tinyambient)
 ta_sanitize(tinyambient)
@@ -217,6 +234,8 @@ endfunction()
 
 ta_add_test(test_noise tests/test_noise.c)
 ta_add_test(test_command tests/test_command.c)
+ta_add_test(test_config tests/test_config.c)
+ta_add_test(test_engine tests/test_engine.c)
 
 # Audio device path. The null backend drives the callback in real time without
 # hardware, so this runs in CI; it is the only automated coverage of audio/.
@@ -246,6 +265,14 @@ add_test(NAME cli
         -DBINARY=$<TARGET_FILE:tinyambient>
         -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)
+
+# Config persistence, status output, and portable mode (PRD FR-06, FR-08,
+# FR-11, FR-13). Runs against a sandboxed XDG_CONFIG_HOME/APPDATA.
+add_test(NAME config
+    COMMAND ${CMAKE_COMMAND}
+        -DBINARY=$<TARGET_FILE:tinyambient>
+        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_check.cmake)
 
 # Spectrum and RMS gate for every noise type (PRD FR-02). Python is optional to
 # build but required to verify the product, so a missing interpreter is a
