@@ -15,13 +15,13 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "core/config.h"
 #include "core/engine.h"
 #include "core/noise.h"
 #include "platform/platform.h"
-
 #define STOP_AFTER_MS 300L
 #define STOP_FADE_MS 200L
 
@@ -54,7 +54,18 @@ static void sleep_ms(long ms)
 
 static void *run_loop(void *arg)
 {
-    int result = wn_platform_run((wn_engine *)arg, STOP_AFTER_MS, STOP_FADE_MS);
+    wn_session session;
+    int result;
+
+    /* No IPC and no config path: the harness exercises the loop itself, not the
+     * daemon's forwarding path (tests/ipc_check.cmake covers that end to end).
+     * Zero bytes mean persistence is disabled, which the loop skips. */
+    memset(&session, 0, sizeof(session));
+    session.stop_after_ms = STOP_AFTER_MS;
+    session.stop_fade_ms = STOP_FADE_MS;
+    session.ready_fd = -1;
+
+    result = wn_platform_run((wn_engine *)arg, &session);
 
     atomic_store_explicit(&loop_result, result, memory_order_relaxed);
     atomic_store_explicit(&loop_done, 1, memory_order_relaxed);

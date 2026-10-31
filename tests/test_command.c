@@ -447,6 +447,50 @@ static void test_line_parser(void)
     CHECK(parse_line("", cmds, err, sizeof(err)) == -1);
 }
 
+static void test_ipc_formatting(void)
+{
+    char buffer[WN_LINE_MAX];
+    char line[WN_LINE_MAX];
+    wn_cmd cmds[WN_CMD_MAX];
+    char err[160] = "";
+    size_t needed;
+    int n;
+
+    /* The buffer must outlive the commands: noise carries an svalue into it. */
+    (void)snprintf(buffer, sizeof(buffer), "noise pink volume 40 play");
+    n = wn_cmd_parse_line(buffer, cmds, WN_CMD_MAX, err, sizeof(err));
+    CHECK(n == 3);
+
+    needed = wn_cmd_format_ipc_line(cmds, n, line, sizeof(line));
+    CHECK(needed == strlen(line));
+    CHECK(strcmp(line, "noise pink volume 40 play") == 0);
+
+    /* The formatted line parses back to the same commands, so client and
+     * daemon really do share one syntax. */
+    CHECK(wn_cmd_parse_line(line, cmds, WN_CMD_MAX, err, sizeof(err)) == 3);
+
+    (void)snprintf(buffer, sizeof(buffer), "stop-after off mono");
+    n = wn_cmd_parse_line(buffer, cmds, WN_CMD_MAX, err, sizeof(err));
+    CHECK(n == 2);
+    (void)wn_cmd_format_ipc_line(cmds, n, line, sizeof(line));
+    CHECK(strcmp(line, "stop-after off mono") == 0);
+
+    /* --portable and --foreground are local to the client. */
+    (void)snprintf(buffer, sizeof(buffer), "portable foreground");
+    n = wn_cmd_parse_line(buffer, cmds, WN_CMD_MAX, err, sizeof(err));
+    CHECK(n == 2);
+    CHECK(wn_cmd_format_ipc_line(cmds, n, line, sizeof(line)) == 0);
+    CHECK(line[0] == '\0');
+
+    /* A short buffer reports the full length, like snprintf. */
+    (void)snprintf(buffer, sizeof(buffer), "noise pink");
+    n = wn_cmd_parse_line(buffer, cmds, WN_CMD_MAX, err, sizeof(err));
+    CHECK(n == 1);
+    needed = wn_cmd_format_ipc_line(cmds, n, line, 4);
+    CHECK(needed == strlen("noise pink"));
+    CHECK(strlen(line) == 3);
+}
+
 int main(void)
 {
     test_render_defaults();
@@ -467,6 +511,7 @@ int main(void)
     test_no_arguments();
     test_render_path();
     test_line_parser();
+    test_ipc_formatting();
 
     if (failures != 0) {
         fprintf(stderr, "test_command: %d check(s) failed\n", failures);

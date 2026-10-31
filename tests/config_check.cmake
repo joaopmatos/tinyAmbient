@@ -1,8 +1,11 @@
 # Config persistence, status output, and portable mode.
-#   cmake -DBINARY=<exe> -DWORKDIR=<dir> -P tests/config_check.cmake
+#   cmake -DBINARY=<exe> -DWORKDIR=<dir> -DVERSION=<v> -P tests/config_check.cmake
 #
 # Every run gets a sandboxed XDG_CONFIG_HOME (Linux) and APPDATA (Windows), so
-# the test never touches the developer's real configuration.
+# the test never touches the developer's real configuration. On POSIX a
+# sandboxed XDG_RUNTIME_DIR keeps the daemon that content commands start from
+# colliding with a real session; each such daemon is quit before the next
+# section touches the file.
 
 if(NOT DEFINED BINARY OR NOT DEFINED WORKDIR OR NOT DEFINED VERSION)
     message(FATAL_ERROR "config_check: BINARY, WORKDIR and VERSION are required")
@@ -14,18 +17,26 @@ file(MAKE_DIRECTORY "${SANDBOX}")
 
 set(XDG "${SANDBOX}/xdg")
 set(APPDATA "${SANDBOX}/appdata")
+set(RUNTIME "${SANDBOX}/runtime")
+file(MAKE_DIRECTORY "${RUNTIME}")
 
 if(WIN32)
     set(CFG "${APPDATA}/tinyAmbient/config.ini")
+    # Until the M8 parity pass a Windows content command persists in-process
+    # and starts no daemon, so status still reports playing=0.
+    set(PLAYING 0)
 else()
     set(CFG "${XDG}/tinyambient/config.ini")
+    set(PLAYING 1)
 endif()
 
 function(run_exe exe)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -E env
             "XDG_CONFIG_HOME=${XDG}"
+            "XDG_RUNTIME_DIR=${RUNTIME}"
             "APPDATA=${APPDATA}"
+            "TINYAMBIENT_AUDIO=null"
             "${exe}" ${ARGN}
         RESULT_VARIABLE result
         OUTPUT_VARIABLE output
@@ -58,13 +69,27 @@ function(expect_status_ok label)
     endif()
 endfunction()
 
-function(expect_status label noise volume mono)
+function(expect_status label playing noise volume mono)
     # VERSION comes from the project; a hardcoded copy breaks on every bump.
     set(expected
-        "version=${VERSION}\nplaying=0\nnoise=${noise}\nvolume=${volume}\nmono=${mono}\nstop_after=off\n")
+        "version=${VERSION}\nplaying=${playing}\nnoise=${noise}\nvolume=${volume}\nmono=${mono}\nstop_after=off\n")
     if(NOT TA_OUT STREQUAL expected)
         message(FATAL_ERROR
             "config_check: ${label}: status mismatch\nexpected:\n${expected}got:\n${TA_OUT}")
+    endif()
+endfunction()
+
+# Stops the daemon a content command may have started. On POSIX the daemon is
+# what persists the setting, so it has to be quit before the test edits the
+# file behind its back. On Windows this is a no-op (exit 1, ignored).
+function(quit_daemon)
+    if(WIN32)
+        return()
+    endif()
+    run_exe("${BINARY}" --quit)
+    if(NOT TA_CODE EQUAL 0)
+        message(FATAL_ERROR
+            "config_check: quit failed with ${TA_CODE}\n${TA_OUT}${TA_ERR}")
     endif()
 endfunction()
 
@@ -72,12 +97,16 @@ endfunction()
 
 run_exe("${BINARY}" --status)
 expect_status_ok("status without a daemon")
-expect_status("status defaults" pink 40 0)
+expect_status("status defaults" 0 pink 40 0)
 if(EXISTS "${CFG}")
     message(FATAL_ERROR "config_check: status created ${CFG}")
 endif()
 
 # --- Persisted settings ------------------------------------------------------
+#
+# On POSIX the first content command starts a daemon and the setting is
+# persisted by the daemon, not by the client (PRD FR-06, section 7 rule 7).
+# The status after it therefore reports playing=1.
 
 run_exe("${BINARY}" --volume 25)
 expect_ok("volume 25")
@@ -87,20 +116,22 @@ endif()
 
 run_exe("${BINARY}" --status)
 expect_status_ok("status after volume")
-expect_status("volume persisted" pink 25 0)
+expect_status("volume persisted" ${PLAYING} pink 25 0)
 
 run_exe("${BINARY}" --noise brown --volume 60 --mono)
 expect_ok("noise, volume, mono")
 
 run_exe("${BINARY}" --status)
 expect_status_ok("status after three settings")
-expect_status("settings persisted" brown 60 1)
+expect_status("settings persisted" ${PLAYING} brown 60 1)
 
 run_exe("${BINARY}" --stereo)
 expect_ok("stereo")
 run_exe("${BINARY}" --status)
 expect_status_ok("status after stereo")
-expect_status("stereo persisted" brown 60 0)
+expect_status("stereo persisted" ${PLAYING} brown 60 0)
+
+quit_daemon()
 
 # --- Usage errors never destroy or rewrite the config ------------------------
 
@@ -119,13 +150,14 @@ if(NOT after_invalid STREQUAL before_invalid)
     message(FATAL_ERROR "config_check: a usage error rewrote the config")
 endif()
 
-# Session commands change no file. At M5 they cannot reach a daemon yet; the
-# invariant that matters here is that they never persist.
+# Session commands change no file. Without a daemon they start one, apply the
+# timer, and leave the configuration untouched.
 run_exe("${BINARY}" --stop-after 5)
 file(READ "${CFG}" after_session)
 if(NOT after_session STREQUAL before_invalid)
     message(FATAL_ERROR "config_check: stop-after rewrote the config")
 endif()
+quit_daemon()
 
 # --- Status and render never write ------------------------------------------
 
@@ -159,6 +191,7 @@ file(WRITE "${CFG}"
 
 run_exe("${BINARY}" --volume 33)
 expect_ok("rewrite with unknown keys")
+quit_daemon()
 file(READ "${CFG}" rewritten)
 if(NOT rewritten MATCHES "future=42")
     message(FATAL_ERROR "config_check: unknown key was dropped:\n${rewritten}")
@@ -199,7 +232,7 @@ if(NOT TA_ERR MATCHES "^tinyambient: ")
     message(FATAL_ERROR
         "config_check: malformed config produced no warning: ${TA_ERR}")
 endif()
-expect_status("malformed values use defaults" pink 40 0)
+expect_status("malformed values use defaults" 0 pink 40 0)
 file(READ "${CFG}" after_broken)
 if(NOT after_broken STREQUAL before_broken)
     message(FATAL_ERROR "config_check: status rewrote a malformed config")
@@ -234,7 +267,8 @@ endif()
 
 run_exe("${PORTABLE_BIN}" --portable --status)
 expect_status_ok("portable status")
-expect_status("portable setting persisted" pink 77 0)
+expect_status("portable setting persisted" ${PLAYING} pink 77 0)
+quit_daemon()
 
 file(READ "${PORTABLE_DIR}/config.ini" portable_text)
 if(NOT portable_text MATCHES "volume=77")

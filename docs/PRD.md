@@ -281,6 +281,7 @@ M0–M7 constitute the Linux release. M8 closes v1.
 | D-13 | `sleep_minutes` dropped from config; timer is session state | Decided |
 | D-14 | Default stereo uses independent per-channel generators | Decided |
 | D-15 | Repository license | Open |
+| D-16 | IPC and the detached daemon are POSIX-only at M7; Windows named pipes and daemon startup are part of the M8 parity pass, and Windows keeps in-process persistence until then | Decided |
 
 ## 14. Open questions
 

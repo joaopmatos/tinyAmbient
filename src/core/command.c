@@ -488,3 +488,118 @@ int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
 
     return parse_tokens(tok, count, out, cap, err, err_cap);
 }
+
+/* --- IPC line formatting ---------------------------------------------------
+ *
+ * The inverse of wn_cmd_parse_line, kept beside it so the CLI and the daemon
+ * can never disagree about command text (ARCHITECTURE 2). `used` accumulates
+ * the full length while only the bytes that fit are written, matching the
+ * snprintf contract used by the config and status formatters. */
+
+static size_t append_text(char *out, size_t cap, size_t used, const char *text)
+{
+    size_t length = strlen(text);
+
+    if (out != NULL && used < cap) {
+        size_t room = cap - used;
+        size_t copy = length < room - 1 ? length : room - 1;
+
+        memcpy(out + used, text, copy);
+        out[used + copy] = '\0';
+    }
+    return used + length;
+}
+
+static size_t append_int(char *out, size_t cap, size_t used, const char *prefix,
+                         int value)
+{
+    char number[24];
+
+    (void)snprintf(number, sizeof(number), "%s%d", prefix, value);
+    return append_text(out, cap, used, number);
+}
+
+static size_t format_one(const wn_cmd *cmd, char *out, size_t cap)
+{
+    size_t used = 0;
+
+    switch (cmd->kind) {
+        case WN_CMD_NOISE: {
+            const char *name = cmd->svalue != NULL
+                                   ? cmd->svalue
+                                   : wn_noise_type_name(cmd->ivalue);
+
+            used = append_text(out, cap, used, "noise ");
+            used = append_text(out, cap, used, name != NULL ? name : "pink");
+            break;
+        }
+        case WN_CMD_VOLUME:
+            used = append_int(out, cap, used, "volume ", cmd->ivalue);
+            break;
+        case WN_CMD_STOP_AFTER:
+            if (cmd->ivalue == WN_STOP_AFTER_OFF) {
+                used = append_text(out, cap, used, "stop-after off");
+            } else {
+                used = append_int(out, cap, used, "stop-after ", cmd->ivalue);
+            }
+            break;
+        case WN_CMD_PLAY:
+            used = append_text(out, cap, used, "play");
+            break;
+        case WN_CMD_PAUSE:
+            used = append_text(out, cap, used, "pause");
+            break;
+        case WN_CMD_TOGGLE:
+            used = append_text(out, cap, used, "toggle");
+            break;
+        case WN_CMD_MONO:
+            used = append_text(out, cap, used, "mono");
+            break;
+        case WN_CMD_STEREO:
+            used = append_text(out, cap, used, "stereo");
+            break;
+        case WN_CMD_STATUS:
+            used = append_text(out, cap, used, "status");
+            break;
+        case WN_CMD_QUIT:
+            used = append_text(out, cap, used, "quit");
+            break;
+        default:
+            /* Local-only and render commands are never forwarded. */
+            break;
+    }
+
+    return used;
+}
+
+size_t wn_cmd_format_ipc_line(const wn_cmd *cmds, int count, char *out,
+                              size_t cap)
+{
+    size_t used = 0;
+    int i;
+
+    if (out != NULL && cap > 0) {
+        out[0] = '\0';
+    }
+    if (cmds == NULL) {
+        return 0;
+    }
+
+    for (i = 0; i < count; i++) {
+        const wn_cmd *cmd = &cmds[i];
+
+        if (cmd->kind == WN_CMD_NONE || cmd->kind == WN_CMD_PORTABLE ||
+            cmd->kind == WN_CMD_FOREGROUND || cmd->kind == WN_CMD_VERSION ||
+            cmd->kind == WN_CMD_HELP || cmd->kind == WN_CMD_RENDER ||
+            cmd->kind == WN_CMD_SECONDS || cmd->kind == WN_CMD_SEED) {
+            continue;
+        }
+        if (used > 0) {
+            used = append_text(out, cap, used, " ");
+        }
+        used += format_one(cmd, out != NULL && used < cap ? out + used : NULL,
+                           out != NULL && used < cap ? cap - used : 0);
+    }
+
+    return used;
+}

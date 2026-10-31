@@ -80,9 +80,12 @@ Contract:
 
 The mapping to IPC text (`noise pink`, `volume 40`) and the inverse parser live
 here, so there is only one semantics. `wn_engine_command` uses the line parser
-rather than re-implementing a command subset.
+rather than re-implementing a command subset. `wn_cmd_format_ipc_line` is the
+other direction: it formats parsed commands back into one line, skipping the
+local-only flags (`--portable`, `--foreground`, `--help`, `--version`) and the
+render options, which the parser already forbids next to daemon commands.
 
-`wn_engine_command` returns 0 on success and non-zero for an unknown or invalid command, so the IPC layer can answer with an error instead of `ok`.
+`wn_engine_command` returns 0 on success and non-zero for an unknown or invalid command, so the IPC layer can answer with an error instead of `ok`. `wn_engine_apply_cmd` applies one already-parsed command, which is what the daemon uses after validating a whole forwarded line.
 
 ---
 
@@ -228,7 +231,8 @@ Other behavior:
   command only after the whole line is known to be supported, so an invalid tail
   cannot leave the engine half-applied. It accepts `noise`, `volume`, `play`,
   `pause`, `toggle`, `mono`, and `stereo`. Status, quit, and stop-after belong to
-  the daemon loop, not the engine.
+  the daemon loop, not the engine. `wn_engine_apply_cmd` is the same application
+  step for commands the daemon has already parsed and validated.
 - The output buffer is always fully written, including during silence.
 - `wn_engine_noise`, `wn_engine_volume`, `wn_engine_is_mono`, and
   `wn_engine_is_playing` expose the state for status output. The stop-after
@@ -243,6 +247,14 @@ it runs before playback starts.
 Volume maps linearly, `0..100 -> 0.0..1.0`, multiplied by the calibrated type
 gain. Mono renders one generator and duplicates the sample, so both channels
 stay bit-identical (FR-13).
+
+### `core/status.c`
+
+Formats the six lines of FR-08 from plain values: playing, noise type, volume,
+mono, and remaining timer seconds (`< 0` means `off`). The daemon and the
+no-daemon fallback in `ui/cli.c` both call it, so the two forms cannot drift.
+The version string comes from `TA_VERSION`, defined `PUBLIC` on `ta_core` by
+CMake so the daemon reports the same value as `--version`.
 
 ---
 
@@ -286,7 +298,10 @@ Resolves the config directory. The only place that touches `getenv`, `HOME`, or 
 - Non-portable saves create missing parent directories with mode `0700`.
 - Portable mode never creates the executable's directory. The atomic write then
   fails with a clear message when that directory is not writable.
-- `wn_paths_ipc_address` lands with IPC in M7.
+- `wn_paths_ipc_address` resolves `$XDG_RUNTIME_DIR/tinyambient.sock`, falling
+  back to `/tmp/tinyambient-<uid>.sock`. The fallback carries the uid because
+  `/tmp` is shared; the socket itself is still mode `0600`. Windows returns
+  failure until the M8 named-pipe pass.
 
 ---
 
@@ -315,26 +330,50 @@ this module owns the path-dependent parts.
 
 ## 9. `platform/run.c`
 
-The daemon main loop at M6: device supervision, the session timer, and quit
-handling. M7 adds IPC polling and daemon forwarding to the same loop.
+The daemon main loop: device supervision, the session timer, IPC command
+dispatch, and quit.
 
-- Starts the device before entering the loop. A device missing at startup is a
-  runtime failure (exit 1, clear message); a device lost later is retried.
-- Wakes every 50 ms to check three things: the quit flag, the restart flag, and
-  the stop-after deadline. One tick bounds the latency of all three.
+- `wn_session` carries everything the loop mutates: the current persisted
+  configuration and its original text, the config path, the portable flag, the
+  initial timer, the readiness pipe, the verbose flag, and the listening socket.
+  It is also what makes the loop testable without a socket (`tests/session_check.c`
+  passes a zeroed session).
+- Starts the device before entering the loop and then reports readiness to the
+  process that forked it. A device missing at startup is a runtime failure (exit
+  1, clear message); a device lost later is retried.
+- Wakes every 50 ms to check the quit flag, the restart flag, the stop-after
+  deadline, and IPC. When a socket is present, `poll` with the same 50 ms timeout
+  is the sleep, so IPC and supervision share one cadence. That is what keeps a
+  forwarded command inside the FR-07 budget of 100 ms.
 - **Restart backoff (FR-16):** 100 ms, 500 ms, 2 s, then every 5 s, forever.
   The loop stops the dead device first, then reintroduces it with
   `wn_audio_start`; on success it calls `wn_engine_fade_in`, so the resume
   starts from silence. Engine state is untouched by any of this.
 - **Stop-after (FR-05):** the deadline is monotonic milliseconds computed at
-  start from the CLI value. At expiry the loop calls `wn_engine_fade_out`, the
-  engine fades and pauses itself, and the loop clears the deadline. The timer is
-  session state; it is never written to configuration.
-- SIGINT and SIGTERM set an atomic quit flag from the handler (`signal()` plus a
-  lock-free store, both async-signal-safe). Any thread may also call
-  `wn_platform_request_quit`, which is how the test harness stops the loop.
+  start from the CLI value or replaced by a forwarded `stop-after`. At expiry the
+  loop calls `wn_engine_fade_out`, the engine fades and pauses itself, and the
+  loop clears the deadline immediately, so status reports `stop_after=off` from
+  the moment the fade starts. The timer is session state; it is never written to
+  configuration.
+- **Command dispatch:** a forwarded line is parsed with the same
+  `wn_cmd_parse_line`, validated as a whole, then persisted settings are saved
+  once, and only after a successful save are the atomics written. A failed save
+  therefore leaves the file and the audio state unchanged and replies
+  `error 1 <message>`. Unsupported kinds reply `error 2 ...`.
+- **Quit** stops accepting and unlinks the socket before sending the final
+  `ok`, so a client that sees the reply can never observe a stale socket.
+- SIGINT, SIGTERM, and SIGPIPE handling: the first two set an atomic quit flag
+  from the handler (`signal()` plus a lock-free store, both async-signal-safe);
+  the third is ignored so a vanished client cannot kill the daemon. Any thread
+  may also call `wn_platform_request_quit`, which is how the test harness stops
+  the loop.
 - `stop_fade_ms` is a parameter so a test build can shorten the product's 20 s
   fade without a second code path.
+- `wn_platform_detach` forks once, calls `setsid`, redirects the standard
+  streams to `/dev/null`, and keeps a readiness pipe open. The parent polls the
+  pipe for five seconds and exits 0 only after the child reports that the device
+  is up; otherwise it kills the child and exits 1. A single fork is enough
+  because the daemon never reopens a terminal.
 
 ---
 
@@ -343,22 +382,46 @@ handling. M7 adds IPC polling and daemon forwarding to the same loop.
 | OS | Address | Permissions |
 |---|---|---|
 | Linux | `$XDG_RUNTIME_DIR/tinyambient.sock` (fallback `/tmp/tinyambient-<uid>.sock`) | `0600` |
-| Windows | `\\.\pipe\tinyambient-<sid>` | Current-user ACL |
+| Windows | `\\.\pipe\tinyambient-<sid>` | Current-user ACL (M8) |
 
 Startup sequence for any invocation:
 
-1. try to connect to the socket/pipe;
-2. if it exists, send the command, read the reply, print it, exit;
-3. if it does not exist, become the daemon and create the socket.
+1. try to connect to the socket;
+2. if it answers, send the command, read the reply, print it, exit;
+3. if it is absent, take the lock and become the daemon.
 
-Details:
+Single instance:
 
-- One command per line, newline-terminated; replies are `ok` or `key=value` lines.
-- Fixed line limit (e.g. 256 bytes); longer commands are a usage error.
-- An orphaned socket (dead process) is removed before creating a new one.
-- An error reply from the daemon makes the client print the message to `stderr` and exit 2.
-- IPC failure returns exit code 3.
-- `--foreground` keeps the process attached to the terminal and logs lifecycle events to `stderr`.
+- The daemon opens `<socket>.lock` and takes an exclusive non-blocking `flock`
+  before it unlinks a stale socket and calls `bind`. A second start fails with
+  "another daemon is already running" instead of stealing the path.
+- `flock` is attached to the open file description, so it survives the fork into
+  the daemon. A POSIX record lock would not: those belong to the process and are
+  dropped when the parent exits.
+- The socket path is recorded in the handle only after the lock is held. A
+  failed start must never unlink a path that belongs to a live daemon; before
+  the lock, `unlink` is not ours to call.
+- The socket is chmodded to `0600` explicitly, so the umask cannot widen it.
+- On quit, the listener is closed and the socket removed while the lock is still
+  held, then the last reply is sent. The next start sees a clean slate.
+
+Protocol:
+
+- One command per line, newline-terminated, at most `WN_LINE_MAX` (256) bytes.
+- Replies are `ok`, the six `key=value` status lines, or
+  `error <exit-code> <message>`. The client prints non-`ok` replies to stdout,
+  prints an error message to stderr, and exits with the code in the reply. A
+  failed daemon-side config write therefore stays exit 1 (FR-14) and an invalid
+  command stays exit 2.
+- The accepted client has a 200 ms receive timeout, so a connection that stalls
+  cannot block the loop. The client has a 2 s send/receive timeout.
+- A connection that closes without a reply is retried twice with a 20 ms pause
+  and then treated as absent. This covers the window in which a `quit` and a
+  fresh start overlap: the second invocation must see either the old daemon or a
+  clean "not there", never a spurious failure.
+
+Windows: `platform/ipc.c` compiles as a stub and `wn_platform_ipc_supported()`
+returns 0. The named pipe and its ACL land with M8 parity.
 
 ---
 
@@ -374,20 +437,36 @@ precedence rules live in PRD section 7; do not duplicate them here.
   drift from the parser. A value is skipped only for a command the parser
   recognizes; after an unrecognized token, help and version still win, exactly
   as they do after `--bogus` (rule 6).
-- `--status` prints exactly the six lines from PRD section 6, FR-08, in order,
-  followed by one newline each. With no daemon it reports the no-daemon form:
-  `playing=0`, `stop_after=off`, and the persisted settings. M7 inserts the IPC
-  query ahead of this fallback.
-- `--foreground` loads the configuration, applies setting commands (and saves
-  them), applies playback commands to the engine, and then runs
-  `wn_platform_run` until SIGINT or SIGTERM. It is the only session path until
-  M7 adds the daemon and IPC.
-- Setting commands (`noise`, `volume`, `mono`, `stereo`) load the file, apply in
-  written order, and save once. `--portable` changes the path, nothing else.
-- `--render` neither reads nor writes configuration.
-- Playback and timer commands without `--foreground` are session state with no
-  process to talk to; they exit 1 with a diagnostic and never write
-  configuration.
+- `--status` queries the daemon first and prints its six lines. With no daemon
+  it prints the no-daemon form from the same `core/status.c` formatter:
+  `playing=0`, `stop_after=off`, and the persisted settings. It never starts a
+  daemon (FR-08).
+- Content commands are formatted with `wn_cmd_format_ipc_line` and forwarded.
+  `ok` is silent; status is not forwardable here because the parser rejects it
+  next to content commands. A daemon error reply is printed and mapped to its
+  exit code. If no daemon answers, the invocation starts one (rule 7).
+- With no forwardable command (a bare start, or `--portable` alone), the client
+  only checks whether a daemon already answers. If one does, the invocation is a
+  no-op; otherwise it starts the daemon. `quit` with nothing running exits 0
+  instead of starting a daemon just to stop it.
+- `--foreground` prepares the session exactly like the background path, then
+  opens the IPC socket without forking and runs `wn_platform_run` until SIGINT,
+  SIGTERM, or a forwarded `quit`. It therefore owns single-instance enforcement
+  too: a second daemon cannot start while it runs.
+- The background path prepares the same state in the client before forking, so
+  the daemon starts where a foreground run would: the setting commands are
+  applied and saved once, the engine is created, the playback commands are
+  applied, and the timer is armed. The parent waits for the readiness byte, so a
+  first start with no audio device still exits 1 with a message.
+- Setting commands (`noise`, `volume`, `mono`, `stereo`) persist. When the daemon
+  applies them, it writes the file itself; playback and timer commands never
+  write. `--portable` changes the path, nothing else. With a daemon already
+  running, `--portable --status` reports that daemon's state: the flag selects a
+  file, and a live daemon has already chosen its own.
+- `--render` neither reads nor writes configuration and never contacts a daemon.
+- On platforms without IPC (`wn_platform_ipc_supported()` is 0, currently
+  Windows until M8), session commands report that the daemon is unavailable and
+  setting commands persist in-process, which is the M6 behavior.
 - Errors go to `stderr` prefixed with `tinyambient: `.
 - Exit codes: 0 success, 1 runtime failure, 2 usage error, 3 IPC failure.
 
@@ -406,7 +485,8 @@ parse argv -> config load -> decide mode
   +- no args    -> start daemon if absent, then exit
 ```
 
-The last three modes land in M7; `--foreground` is the M6 form of the daemon.
+All four non-render modes are live as of M7. `--foreground` runs the same loop
+without detaching.
 
 `--render` starts no daemon, opens no device, and reads and writes no config. It
 uses the same `wn_engine_render` with an explicit seed so output matches
@@ -446,3 +526,10 @@ At the 3600 s limit the data chunk is 1,382,400,000 bytes, which still fits the
 12. A saved config is mode `0600` and leaves no temporary file behind.
 13. The first sample after an engine start or a device restart is exactly zero;
     a stop fade ends with `playing=0` and exact silence.
+14. A forwarded setting is persisted by the daemon; a forwarded playback or
+    timer command never writes the file.
+15. A daemon-side invalid command replies `error 2 ...`; a failed config write
+    replies `error 1 ...` and changes neither the file nor the engine.
+16. `quit` removes the socket before the client sees the reply, and the daemon
+    process is gone shortly after.
+17. Two starts in a row leave exactly one daemon.

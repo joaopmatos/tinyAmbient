@@ -68,4 +68,11 @@ int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
  * ui/cli.c uses this so its value-skipping cannot drift from the parser. */
 int wn_cmd_takes_value(const char *name);
 
+/* Formats `count` commands as one IPC line. --portable, --foreground, --help,
+ * and --version are local to the client and are skipped; the parser already
+ * forbids render options in a forwarded line. Returns the byte count the line
+ * needs, snprintf-style, so a result >= cap signals truncation. */
+size_t wn_cmd_format_ipc_line(const wn_cmd *cmds, int count, char *out,
+                              size_t cap);
+
 #endif /* WN_CORE_COMMAND_H */

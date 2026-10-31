@@ -119,8 +119,12 @@ add_library(ta_core STATIC
     src/core/noise.c
     src/core/engine.c
     src/core/command.c
-    src/core/config.c)
+    src/core/config.c
+    src/core/status.c)
 target_include_directories(ta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# PUBLIC so the daemon, the client, and --version report one version string
+# (PRD FR-15). core/status.c formats it without touching any OS API.
+target_compile_definitions(ta_core PUBLIC TA_VERSION="${PROJECT_VERSION}")
 ta_warnings(ta_core)
 ta_c11(ta_core)
 ta_sanitize(ta_core)
@@ -137,6 +141,7 @@ endif()
 add_library(ta_platform STATIC
     src/platform/paths.c
     src/platform/config_file.c
+    src/platform/ipc.c
     src/platform/run.c)
 target_link_libraries(ta_platform PUBLIC ta_core)
 ta_warnings(ta_platform)
@@ -147,7 +152,6 @@ ta_optimize(ta_platform)
 add_library(ta_ui STATIC
     src/ui/cli.c)
 target_link_libraries(ta_ui PUBLIC ta_core ta_platform)
-target_compile_definitions(ta_ui PRIVATE TA_VERSION="${PROJECT_VERSION}")
 ta_warnings(ta_ui)
 ta_c11(ta_ui)
 ta_sanitize(ta_ui)
@@ -248,6 +252,7 @@ ta_add_test(test_noise tests/test_noise.c)
 ta_add_test(test_command tests/test_command.c)
 ta_add_test(test_config tests/test_config.c)
 ta_add_test(test_engine tests/test_engine.c)
+ta_add_test(test_status tests/test_status.c)
 
 # Audio device path. The null backend drives the callback in real time without
 # hardware, so this runs in CI; it is the only automated coverage of audio/.
@@ -304,6 +309,18 @@ add_test(NAME config
         -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
         -DVERSION=${PROJECT_VERSION}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_check.cmake)
+
+# IPC, single instance, and forwarded commands (PRD FR-07, FR-08, FR-09).
+# POSIX only: it inspects /proc, socket modes, and wall-clock latency, all of
+# which belong to the Linux release. Windows coverage comes from the M8 pass.
+if(UNIX)
+    add_test(NAME ipc
+        COMMAND ${CMAKE_COMMAND}
+            -DBINARY=$<TARGET_FILE:tinyambient>
+            -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DVERSION=${PROJECT_VERSION}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_check.cmake)
+endif()
 
 # Spectrum and RMS gate for every noise type (PRD FR-02). Python is optional to
 # build but required to verify the product, so a missing interpreter is a

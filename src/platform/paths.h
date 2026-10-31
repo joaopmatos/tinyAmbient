@@ -22,7 +22,8 @@ int wn_paths_config_file(char *out, size_t cap, int portable);
 int wn_paths_make_config_dir(const char *file, int portable, char *err,
                              size_t err_cap);
 
-/* <runtime-dir>/tinyambient.sock on Linux. Lands in M7. */
+/* <runtime-dir>/tinyambient.sock on Linux: $XDG_RUNTIME_DIR when set, otherwise
+ * /tmp/tinyambient-<uid>.sock. Windows named pipes land in M8. */
 int wn_paths_ipc_address(char *out, size_t cap);
 
 #endif /* WN_PLATFORM_PATHS_H */

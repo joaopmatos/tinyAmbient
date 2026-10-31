@@ -234,3 +234,26 @@ int wn_paths_make_config_dir(const char *file, int portable, char *err,
 
     return make_directories(parent, err, err_cap);
 }
+
+int wn_paths_ipc_address(char *out, size_t cap)
+{
+#if defined(_WIN32)
+    /* Named pipes with a per-user ACL are part of the M8 parity pass. Returning
+     * failure here keeps the Windows build honest: the CLI reports that the
+     * daemon is unavailable instead of pretending IPC works. */
+    (void)out;
+    (void)cap;
+    return -1;
+#else
+    const char *runtime = getenv("XDG_RUNTIME_DIR");
+
+    if (runtime != NULL && runtime[0] != '\0') {
+        return format_path(out, cap, "%s/tinyambient.sock", runtime);
+    }
+
+    /* Without XDG_RUNTIME_DIR there is no per-user directory, so the fallback
+     * carries the uid to keep users apart. */
+    return format_path(out, cap, "/tmp/tinyambient-%lu.sock",
+                       (unsigned long)getuid());
+#endif
+}

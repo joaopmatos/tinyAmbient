@@ -221,6 +221,15 @@ static int command_supported(wn_cmd_kind kind)
            kind == WN_CMD_STEREO;
 }
 
+int wn_engine_apply_cmd(wn_engine *e, const wn_cmd *cmd)
+{
+    if (e == NULL || cmd == NULL || !command_supported(cmd->kind)) {
+        return -1;
+    }
+    apply_command(e, cmd);
+    return 0;
+}
+
 int wn_engine_command(wn_engine *e, const char *line)
 {
     char buf[WN_LINE_MAX];

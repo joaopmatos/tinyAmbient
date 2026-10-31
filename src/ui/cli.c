@@ -1,12 +1,14 @@
 #include "ui/cli.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/command.h"
 #include "core/config.h"
 #include "core/engine.h"
 #include "core/noise.h"
+#include "core/status.h"
 #include "platform/config_file.h"
 #include "platform/paths.h"
 #include "platform/platform.h"
@@ -316,14 +318,34 @@ static int save_config_file(const char *path, const wn_config *cfg,
     return WN_EXIT_OK;
 }
 
+/* --- Session setup --------------------------------------------------------
+ *
+ * Both session modes share one preparation step: read the configuration, apply
+ * the persisted setting commands, save once, create the engine, then apply the
+ * playback and timer commands. Preparing before the fork copies the resulting
+ * state into the daemon, so the child starts exactly where a foreground run
+ * would (PRD section 7 rule 7: the same commands produce the same result on
+ * both paths). */
+
+typedef struct {
+    wn_config cfg;
+    char path[WN_PATH_MAX];
+    char text[WN_CONFIG_TEXT_MAX];
+    size_t text_len;
+    wn_engine *engine;
+    long stop_after_ms;
+    int quit_only;
+} session_setup;
+
 static void print_status(const wn_config *cfg)
 {
-    printf("version=%s\n", TA_VERSION);
-    printf("playing=0\n");
-    printf("noise=%s\n", wn_noise_type_name(cfg->noise));
-    printf("volume=%d\n", cfg->volume);
-    printf("mono=%d\n", cfg->mono != 0 ? 1 : 0);
-    printf("stop_after=off\n");
+    char text[WN_IPC_REPLY_MAX];
+
+    /* The no-daemon form from FR-08: the persisted settings, playing=0, and no
+     * timer. The formatter is shared with the daemon reply. */
+    (void)wn_status_format(text, sizeof(text), 0, cfg->noise, cfg->volume,
+                           cfg->mono, WN_STOP_AFTER_SECONDS_OFF);
+    fputs(text, stdout);
 }
 
 static void apply_persisted(wn_config *cfg, const wn_cmd *cmd)
@@ -346,32 +368,277 @@ static void apply_persisted(wn_config *cfg, const wn_cmd *cmd)
     }
 }
 
-/* --foreground: run the session attached to this terminal (PRD FR-12).
- *
- * At M6 there is no IPC, so this is also how the stop-after timer and the
- * device recovery path are exercised on a real machine; M7 turns the same loop
- * into the background daemon and adds command forwarding. Setting commands
- * persist before the engine starts, so the engine comes up in the requested
- * state and the file matches it (FR-06, section 7 rule 7). Playback commands
- * are session state and never touch the file. */
+static int prepare_session(const wn_cmd *cmds, int n, int portable,
+                           session_setup *setup)
+{
+    int have_persist = 0;
+    int result;
+    int i;
+
+    memset(setup, 0, sizeof(*setup));
+    setup->stop_after_ms = -1;
+
+    for (i = 0; i < n; i++) {
+        if (cmds[i].kind == WN_CMD_QUIT) {
+            /* Nothing is running, so quitting is already satisfied. */
+            setup->quit_only = 1;
+            return WN_EXIT_OK;
+        }
+    }
+
+    result = resolve_config_path(setup->path, sizeof(setup->path), portable);
+    if (result != WN_EXIT_OK) {
+        return result;
+    }
+    result = load_config_file(setup->path, &setup->cfg, setup->text,
+                              &setup->text_len);
+    if (result != WN_EXIT_OK) {
+        return result;
+    }
+
+    for (i = 0; i < n; i++) {
+        switch (cmds[i].kind) {
+            case WN_CMD_NOISE:
+            case WN_CMD_VOLUME:
+            case WN_CMD_MONO:
+            case WN_CMD_STEREO:
+                apply_persisted(&setup->cfg, &cmds[i]);
+                have_persist = 1;
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (have_persist) {
+        result = save_config_file(setup->path, &setup->cfg,
+                                  setup->text_len > 0 ? setup->text : NULL,
+                                  portable);
+        if (result != WN_EXIT_OK) {
+            return result;
+        }
+    }
+
+    setup->engine = wn_engine_create(&setup->cfg);
+    if (setup->engine == NULL) {
+        wn_cli_error("out of memory");
+        return WN_EXIT_RUNTIME;
+    }
+
+    for (i = 0; i < n; i++) {
+        switch (cmds[i].kind) {
+            case WN_CMD_PLAY:
+            case WN_CMD_PAUSE:
+            case WN_CMD_TOGGLE:
+                (void)wn_engine_apply_cmd(setup->engine, &cmds[i]);
+                break;
+            case WN_CMD_STOP_AFTER:
+                setup->stop_after_ms = cmds[i].ivalue == WN_STOP_AFTER_OFF
+                                           ? -1
+                                           : (long)cmds[i].ivalue * 60000L;
+                break;
+            default:
+                break;
+        }
+    }
+
+    return WN_EXIT_OK;
+}
+
+static void fill_session(wn_session *session, const session_setup *setup,
+                         int portable, int verbose)
+{
+    memset(session, 0, sizeof(*session));
+    session->config = setup->cfg;
+    (void)snprintf(session->config_path, sizeof(session->config_path), "%s",
+                   setup->path);
+    if (setup->text_len > 0 && setup->text_len < sizeof(session->config_text)) {
+        memcpy(session->config_text, setup->text, setup->text_len);
+        session->config_text[setup->text_len] = '\0';
+        session->config_text_len = setup->text_len;
+    }
+    session->portable = portable;
+    session->stop_after_ms = setup->stop_after_ms;
+    session->stop_fade_ms = WN_STOP_FADE_MS;
+    session->ready_fd = -1;
+    session->verbose = verbose;
+}
+
+/* --foreground: run the session attached to this terminal (PRD FR-12). It also
+ * owns the IPC socket, so forwarded commands work against a foreground daemon
+ * exactly as they do against a detached one. */
 static int run_foreground(const wn_cmd *cmds, int n, int portable)
+{
+    session_setup setup;
+    wn_session session;
+    wn_engine *engine;
+    char err[160];
+    int result;
+
+    result = prepare_session(cmds, n, portable, &setup);
+    if (result != WN_EXIT_OK) {
+        return result;
+    }
+    if (setup.quit_only) {
+        return WN_EXIT_OK;
+    }
+    engine = setup.engine;
+
+    fill_session(&session, &setup, portable, 1);
+    session.ipc = wn_ipc_server_open(err, sizeof(err));
+    if (session.ipc == NULL) {
+        wn_cli_error(err);
+        wn_engine_destroy(engine);
+        return WN_EXIT_IPC;
+    }
+
+    result = wn_platform_run(engine, &session);
+    wn_engine_destroy(engine);
+
+    if (result != 0) {
+        wn_cli_error("cannot open an audio device");
+        return WN_EXIT_RUNTIME;
+    }
+    return WN_EXIT_OK;
+}
+
+/* Background daemon: bind the single-instance socket, fork, and let the child
+ * run the loop. The parent returns as soon as the child reports that the audio
+ * device is up, so a first start still fails with exit 1 and a clear message
+ * when no device exists (PRD FR-14, FR-09). */
+static int run_background(const wn_cmd *cmds, int n, int portable)
+{
+    session_setup setup;
+    wn_session session;
+    wn_engine *engine;
+    char err[160];
+    int ready_fd = -1;
+    int result;
+
+    if (!wn_platform_ipc_supported()) {
+        wn_cli_error("the background daemon requires Windows parity (M8); "
+                     "use --foreground");
+        return WN_EXIT_RUNTIME;
+    }
+
+    result = prepare_session(cmds, n, portable, &setup);
+    if (result != WN_EXIT_OK) {
+        return result;
+    }
+    if (setup.quit_only) {
+        return WN_EXIT_OK;
+    }
+    engine = setup.engine;
+
+    fill_session(&session, &setup, portable, 0);
+    session.ipc = wn_ipc_server_open(err, sizeof(err));
+    if (session.ipc == NULL) {
+        wn_cli_error(err);
+        wn_engine_destroy(engine);
+        return WN_EXIT_IPC;
+    }
+
+    result = wn_platform_detach(&ready_fd, err, sizeof(err));
+    if (result == WN_DETACH_ERROR) {
+        wn_cli_error(err);
+        wn_ipc_server_close(session.ipc);
+        wn_engine_destroy(engine);
+        return WN_EXIT_IPC;
+    }
+    if (result == WN_DETACH_PARENT) {
+        /* The daemon owns the socket now. Release this process's descriptors
+         * and memory without unlinking the path, then let the client exit. */
+        wn_ipc_server_abandon(session.ipc);
+        wn_engine_destroy(engine);
+        return WN_EXIT_OK;
+    }
+    if (result == WN_DETACH_PARENT_FAIL) {
+        /* The child either cleaned up its own handle or was killed, leaving a
+         * stale socket the next start removes under the lock. This process only
+         * reports the failure; unlinking here could delete a socket a newer
+         * daemon has just bound. */
+        wn_cli_error(err);
+        wn_ipc_server_abandon(session.ipc);
+        wn_engine_destroy(engine);
+        return WN_EXIT_RUNTIME;
+    }
+
+    /* Child. */
+    session.ready_fd = ready_fd;
+    result = wn_platform_run(engine, &session);
+    wn_engine_destroy(engine);
+
+    if (result != 0) {
+        return WN_EXIT_RUNTIME;
+    }
+    return WN_EXIT_OK;
+}
+
+/* --- Forwarded replies ----------------------------------------------------- */
+
+/* Prints a daemon reply and maps it to an exit code. `ok` is silent: setting
+ * and playback commands produce no output (PRD FR-01, FR-06). An error reply
+ * carries the exit code the daemon could not produce itself, so a failed
+ * config write still exits 1 (FR-14) and an invalid command exits 2. */
+static int handle_reply(const char *reply)
+{
+    char message[WN_IPC_REPLY_MAX];
+    char *end = NULL;
+    long code = WN_EXIT_USAGE;
+    const char *text = reply;
+    size_t length;
+
+    if (strncmp(reply, "error ", 6) == 0) {
+        text = reply + 6;
+        code = strtol(text, &end, 10);
+        if (end != text && *end == ' ') {
+            text = end + 1;
+        } else {
+            code = WN_EXIT_USAGE;
+        }
+
+        (void)snprintf(message, sizeof(message), "%s", text);
+        length = strlen(message);
+        while (length > 0 &&
+               (message[length - 1] == '\n' || message[length - 1] == '\r')) {
+            message[--length] = '\0';
+        }
+        wn_cli_error(message);
+
+        if (code == WN_EXIT_RUNTIME || code == WN_EXIT_IPC) {
+            return (int)code;
+        }
+        return WN_EXIT_USAGE;
+    }
+
+    if (strncmp(reply, "ok", 2) != 0) {
+        fputs(reply, stdout);
+    }
+    return WN_EXIT_OK;
+}
+
+static int has_kind(const wn_cmd *cmds, int n, wn_cmd_kind kind)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (cmds[i].kind == kind) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* M6 behavior for platforms without IPC yet: settings persist in-process and
+ * session commands have no daemon to reach. Windows uses this until M8. */
+static int persist_in_process(const wn_cmd *cmds, int n, int portable)
 {
     wn_config cfg;
     char path[WN_PATH_MAX];
     char text[WN_CONFIG_TEXT_MAX];
     size_t text_len = 0;
-    wn_engine *engine;
-    long stop_after_ms = -1;
-    int have_persist = 0;
     int result;
     int i;
-
-    for (i = 0; i < n; i++) {
-        if (cmds[i].kind == WN_CMD_QUIT) {
-            /* Nothing is running yet, so quitting is already satisfied. */
-            return WN_EXIT_OK;
-        }
-    }
 
     result = resolve_config_path(path, sizeof(path), portable);
     if (result != WN_EXIT_OK) {
@@ -383,63 +650,10 @@ static int run_foreground(const wn_cmd *cmds, int n, int portable)
     }
 
     for (i = 0; i < n; i++) {
-        switch (cmds[i].kind) {
-            case WN_CMD_NOISE:
-            case WN_CMD_VOLUME:
-            case WN_CMD_MONO:
-            case WN_CMD_STEREO:
-                apply_persisted(&cfg, &cmds[i]);
-                have_persist = 1;
-                break;
-            default:
-                break;
-        }
+        apply_persisted(&cfg, &cmds[i]);
     }
 
-    if (have_persist) {
-        result =
-            save_config_file(path, &cfg, text_len > 0 ? text : NULL, portable);
-        if (result != WN_EXIT_OK) {
-            return result;
-        }
-    }
-
-    engine = wn_engine_create(&cfg);
-    if (engine == NULL) {
-        wn_cli_error("out of memory");
-        return WN_EXIT_RUNTIME;
-    }
-
-    for (i = 0; i < n; i++) {
-        switch (cmds[i].kind) {
-            case WN_CMD_PLAY:
-                (void)wn_engine_command(engine, "play");
-                break;
-            case WN_CMD_PAUSE:
-                (void)wn_engine_command(engine, "pause");
-                break;
-            case WN_CMD_TOGGLE:
-                (void)wn_engine_command(engine, "toggle");
-                break;
-            case WN_CMD_STOP_AFTER:
-                stop_after_ms = cmds[i].ivalue == WN_STOP_AFTER_OFF
-                                    ? -1
-                                    : (long)cmds[i].ivalue * 60000L;
-                break;
-            default:
-                break;
-        }
-    }
-
-    result = wn_platform_run(engine, stop_after_ms, WN_STOP_FADE_MS);
-    wn_engine_destroy(engine);
-
-    if (result != 0) {
-        wn_cli_error("cannot open an audio device");
-        return WN_EXIT_RUNTIME;
-    }
-
-    return WN_EXIT_OK;
+    return save_config_file(path, &cfg, text_len > 0 ? text : NULL, portable);
 }
 
 int wn_cli_main(int argc, const char *const *argv)
@@ -550,17 +764,32 @@ int wn_cli_main(int argc, const char *const *argv)
     }
 
     if (have_status) {
-        wn_config cfg;
+        char reply[WN_IPC_REPLY_MAX];
 
-        result = resolve_config_path(path, sizeof(path), portable);
-        if (result != WN_EXIT_OK) {
-            return result;
+        /* A running daemon answers with its live session state (FR-08). With no
+         * daemon, the persisted settings stand in and nothing is started. */
+        result = wn_platform_ipc_send("status", reply, sizeof(reply));
+        if (result == WN_IPC_OK) {
+            return handle_reply(reply);
         }
-        result = load_config_file(path, &cfg, text, &text_len);
-        if (result != WN_EXIT_OK) {
-            return result;
+        if (result == WN_IPC_ERROR) {
+            wn_cli_error("cannot query the daemon");
+            return WN_EXIT_IPC;
         }
-        print_status(&cfg);
+
+        {
+            wn_config cfg;
+
+            result = resolve_config_path(path, sizeof(path), portable);
+            if (result != WN_EXIT_OK) {
+                return result;
+            }
+            result = load_config_file(path, &cfg, text, &text_len);
+            if (result != WN_EXIT_OK) {
+                return result;
+            }
+            print_status(&cfg);
+        }
         return WN_EXIT_OK;
     }
 
@@ -568,30 +797,58 @@ int wn_cli_main(int argc, const char *const *argv)
         return run_foreground(cmds, n, portable);
     }
 
-    if (have_session || !have_persist) {
-        /* The background daemon and IPC land in M7. Until then --foreground
-         * is the only way to run a session. */
-        wn_cli_error("daemon mode is not implemented yet; use --foreground");
-        return WN_EXIT_RUNTIME;
-    }
-
     {
-        wn_config cfg;
+        char line[WN_LINE_MAX];
+        char reply[WN_IPC_REPLY_MAX];
+        size_t length = wn_cmd_format_ipc_line(cmds, n, line, sizeof(line));
 
-        result = resolve_config_path(path, sizeof(path), portable);
-        if (result != WN_EXIT_OK) {
-            return result;
-        }
-        result = load_config_file(path, &cfg, text, &text_len);
-        if (result != WN_EXIT_OK) {
-            return result;
+        if (length >= sizeof(line)) {
+            wn_cli_error("the command line is too long");
+            return WN_EXIT_USAGE;
         }
 
-        for (i = 0; i < n; i++) {
-            apply_persisted(&cfg, &cmds[i]);
+        /* Content commands go to the running daemon (PRD section 7 rule 7).
+         * With no daemon they are applied by the one this invocation starts. */
+        if (length > 0) {
+            result = wn_platform_ipc_send(line, reply, sizeof(reply));
+            if (result == WN_IPC_OK) {
+                return handle_reply(reply);
+            }
+            if (result == WN_IPC_ERROR) {
+                wn_cli_error("cannot reach the daemon");
+                return WN_EXIT_IPC;
+            }
+        } else {
+            /* No forwardable command: a bare start (or --portable alone). An
+             * existing daemon makes this a no-op, exactly like a second bare
+             * invocation of a running session (FR-09). */
+            result = wn_platform_ipc_send("status", reply, sizeof(reply));
+            if (result == WN_IPC_OK) {
+                return WN_EXIT_OK;
+            }
+            if (result == WN_IPC_ERROR) {
+                wn_cli_error("cannot query the daemon");
+                return WN_EXIT_IPC;
+            }
         }
 
-        return save_config_file(path, &cfg, text_len > 0 ? text : NULL,
-                                portable);
+        /* `quit` with nothing running is already satisfied; starting a daemon
+         * only to stop it would be pointless. */
+        if (has_kind(cmds, n, WN_CMD_QUIT)) {
+            return WN_EXIT_OK;
+        }
+
+        if (!wn_platform_ipc_supported()) {
+            /* Windows until the M8 parity pass: settings persist in-process,
+             * everything that needs a daemon reports it. */
+            if (have_persist && !have_session) {
+                return persist_in_process(cmds, n, portable);
+            }
+            wn_cli_error("the background daemon requires Windows parity (M8); "
+                         "use --foreground");
+            return WN_EXIT_RUNTIME;
+        }
+
+        return run_background(cmds, n, portable);
     }
 }

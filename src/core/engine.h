@@ -1,6 +1,7 @@
 #ifndef WN_CORE_ENGINE_H
 #define WN_CORE_ENGINE_H
 
+#include "core/command.h"
 #include "core/config.h"
 #include "core/noise.h"
 
@@ -32,6 +33,12 @@ void wn_engine_set_seed(wn_engine *e, uint64_t seed);
  * the caller's buffer is left untouched. Safe to call from the main thread
  * while the audio thread renders: only atomics are written. */
 int wn_engine_command(wn_engine *e, const char *line);
+
+/* Applies one already-parsed setting or playback command. Returns 0 on success,
+ * non-zero when the kind is not an engine command. The daemon loop uses this
+ * after it has validated a whole line, so a forwarded command does not have to
+ * be formatted back into text and parsed again. */
+int wn_engine_apply_cmd(wn_engine *e, const wn_cmd *cmd);
 
 /* Fades to silence over `ms` milliseconds and pauses when the fade lands.
  * This is the session timer's expiry (PRD FR-05): the daemon requests it and
