@@ -67,7 +67,7 @@ void wn_ipc_server_drop(wn_ipc_server *s)
     (void)s;
 }
 
-void wn_ipc_server_stop_accepting(wn_ipc_server *s)
+void wn_ipc_server_release(wn_ipc_server *s)
 {
     (void)s;
 }
