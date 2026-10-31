@@ -209,6 +209,14 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
             }
             seen_render = 1;
             value = tok[i + 1];
+            if (value[0] == '-') {
+                /* Every other value option rejects a flag-looking value
+                 * through its range check. Render is the only free-form one,
+                 * so the check is spelled out; without it, `--render --help`
+                 * silently writes a file named "--help". */
+                set_error(err, err_cap, "a render path may not start with '-'");
+                return -1;
+            }
             if (emit(out, cap, &n, WN_CMD_RENDER, 0, value, err, err_cap) !=
                 0) {
                 return -1;
@@ -421,6 +429,13 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
 
     /* argv[0] is the program name. */
     return parse_tokens(argv + 1, argc - 1, out, cap, err, err_cap);
+}
+
+int wn_cmd_takes_value(const char *name)
+{
+    return arg_is(name, "noise") || arg_is(name, "volume") ||
+           arg_is(name, "stop-after") || arg_is(name, "render") ||
+           arg_is(name, "seconds") || arg_is(name, "seed");
 }
 
 int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,

@@ -403,6 +403,26 @@ static void test_no_arguments(void)
     CHECK(parse(argv, cmds, err, sizeof(err)) == 0);
 }
 
+static void test_render_path(void)
+{
+    static const char *const flag_value[] = {"t", "--render", "--help", NULL};
+    static const char *const dash_value[] = {"t", "--render", "-out.raw", NULL};
+    static const char *const bare_form[] = {"t", "render", "--seconds", NULL};
+    static const char *const ok_path[] = {"t", "--render", "out.raw", NULL};
+    wn_cmd cmds[WN_CMD_MAX];
+    char err[160] = "";
+
+    /* Every other value option rejects a flag-looking value through
+     * validation; render must not quietly write a file named "--help". */
+    CHECK(parse(flag_value, cmds, err, sizeof(err)) == -1);
+    CHECK(err[0] != '\0');
+    CHECK(parse(dash_value, cmds, err, sizeof(err)) == -1);
+    CHECK(parse(bare_form, cmds, err, sizeof(err)) == -1);
+
+    CHECK(parse(ok_path, cmds, err, sizeof(err)) == 1);
+    CHECK(cmds[0].kind == WN_CMD_RENDER);
+}
+
 static void test_line_parser(void)
 {
     wn_cmd cmds[WN_CMD_MAX];
@@ -442,6 +462,7 @@ int main(void)
     test_terminator();
     test_version_and_help();
     test_no_arguments();
+    test_render_path();
     test_line_parser();
 
     if (failures != 0) {

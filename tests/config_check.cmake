@@ -4,8 +4,8 @@
 # Every run gets a sandboxed XDG_CONFIG_HOME (Linux) and APPDATA (Windows), so
 # the test never touches the developer's real configuration.
 
-if(NOT DEFINED BINARY OR NOT DEFINED WORKDIR)
-    message(FATAL_ERROR "config_check: BINARY and WORKDIR are required")
+if(NOT DEFINED BINARY OR NOT DEFINED WORKDIR OR NOT DEFINED VERSION)
+    message(FATAL_ERROR "config_check: BINARY, WORKDIR and VERSION are required")
 endif()
 
 set(SANDBOX "${WORKDIR}/config_check")
@@ -59,8 +59,9 @@ function(expect_status_ok label)
 endfunction()
 
 function(expect_status label noise volume mono)
+    # VERSION comes from the project; a hardcoded copy breaks on every bump.
     set(expected
-        "version=0.1.0\nplaying=0\nnoise=${noise}\nvolume=${volume}\nmono=${mono}\nstop_after=off\n")
+        "version=${VERSION}\nplaying=0\nnoise=${noise}\nvolume=${volume}\nmono=${mono}\nstop_after=off\n")
     if(NOT TA_OUT STREQUAL expected)
         message(FATAL_ERROR
             "config_check: ${label}: status mismatch\nexpected:\n${expected}got:\n${TA_OUT}")
@@ -144,13 +145,16 @@ if(NOT after_render STREQUAL before_render)
     message(FATAL_ERROR "config_check: render rewrote the config")
 endif()
 
-# --- Unknown keys survive a rewrite -----------------------------------------
+# --- Unknown keys and comments survive a rewrite -----------------------------
 
 file(WRITE "${CFG}"
+    "# top comment\n"
     "[general]\n"
     "noise=white\n"
+    "# keep me\n"
     "future=42\n"
     "[other]\n"
+    "; section comment\n"
     "x=1\n")
 
 run_exe("${BINARY}" --volume 33)
@@ -158,6 +162,15 @@ expect_ok("rewrite with unknown keys")
 file(READ "${CFG}" rewritten)
 if(NOT rewritten MATCHES "future=42")
     message(FATAL_ERROR "config_check: unknown key was dropped:\n${rewritten}")
+endif()
+if(NOT rewritten MATCHES "# top comment")
+    message(FATAL_ERROR "config_check: comment was dropped:\n${rewritten}")
+endif()
+if(NOT rewritten MATCHES "# keep me")
+    message(FATAL_ERROR "config_check: comment was dropped:\n${rewritten}")
+endif()
+if(NOT rewritten MATCHES "; section comment")
+    message(FATAL_ERROR "config_check: comment was dropped:\n${rewritten}")
 endif()
 if(NOT rewritten MATCHES "\[other\]")
     message(FATAL_ERROR "config_check: unknown section was dropped:\n${rewritten}")

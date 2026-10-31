@@ -75,7 +75,9 @@ static int executable_dir(char *out, size_t cap)
     char *slash;
 
     length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (length <= 0 || (size_t)length >= sizeof(exe)) {
+    if (length <= 0 || (size_t)length >= sizeof(exe) - 1) {
+        /* readlink truncates silently at the buffer size, so a full buffer
+         * means the path did not fit and was cut off mid-way. */
         return -1;
     }
     exe[length] = '\0';

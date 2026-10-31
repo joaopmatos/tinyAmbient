@@ -224,18 +224,15 @@ static int render_file(const char *path, int seconds, uint64_t seed,
 
 /* --- CLI modes ------------------------------------------------------------ */
 
-/* True when the token consumes the next argv element. Used by the precedence
- * scan so that `--noise help` is a value, not a request for usage text. */
-static int takes_value(const char *name)
-{
-    return strcmp(name, "noise") == 0 || strcmp(name, "volume") == 0 ||
-           strcmp(name, "stop-after") == 0 || strcmp(name, "render") == 0 ||
-           strcmp(name, "seconds") == 0 || strcmp(name, "seed") == 0;
-}
-
 /* PRD section 7 rule 6: --help and --version take precedence over every other
  * argument. The full parser runs afterwards; this pass only looks for the two
- * tokens, skipping values so they are not mistaken for commands. */
+ * tokens, skipping values so they are not mistaken for commands.
+ *
+ * A value is skipped only for a command the parser itself recognizes
+ * (wn_cmd_takes_value shares the parser's case-sensitive matching). After an
+ * unrecognized token there is no value to skip, so a following help/version
+ * still wins -- the same outcome cli_check asserts for `--bogus --help`: rule
+ * 6 covers bad flags too. */
 static void scan_precedence(int argc, const char *const *argv, int *want_help,
                             int *want_version)
 {
@@ -265,7 +262,7 @@ static void scan_precedence(int argc, const char *const *argv, int *want_help,
             *want_version = 1;
         }
 
-        if (takes_value(name) && i + 1 < argc) {
+        if (wn_cmd_takes_value(name) && i + 1 < argc) {
             i++;
         }
     }

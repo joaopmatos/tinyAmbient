@@ -65,6 +65,9 @@ expect_code(2 "seed without render" --seed 5)
 expect_code(2 "status with a content command" --status --volume 5)
 expect_code(2 "render with a daemon command" --render "${OUT_RAW}" --play)
 expect_code(2 "render with status" --render "${OUT_RAW}" --status)
+expect_code(2 "render path may not be a flag" --render --help --seconds 1)
+expect_code(2 "render path may not start with a dash"
+    --render -out.raw --seconds 1)
 expect_code(2 "duplicate render"
     --render "${OUT_RAW}" --render "${WORKDIR}/cli_check_b.raw" --seconds 1)
 expect_code(2 "duplicate seconds" --render "${OUT_RAW}" --seconds 1 --seconds 2)

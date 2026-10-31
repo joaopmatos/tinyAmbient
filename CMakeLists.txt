@@ -207,9 +207,14 @@ enable_testing()
 
 # The budget applies to the stripped Release binary. A sanitizer build links the
 # ASan/UBSan runtime, which alone pushes the file past 150 KB, so measuring it
-# would report a breach that says nothing about shipped code. The manual
-# size-check target stays available, but it too expects a Release configuration.
-if(NOT TA_SANITIZE)
+# would report a breach that says nothing about shipped code. Debug and
+# RelWithDebInfo are equally unrepresentative: they skip -Os, --gc-sections, and
+# stripping. The gate therefore runs only for the Release configuration.
+# Multi-config generators decide at ctest time instead; run them with
+# `ctest -C Release`. The manual size-check target stays available, but it too
+# expects a Release configuration.
+if(NOT TA_SANITIZE AND (CMAKE_CONFIGURATION_TYPES OR
+                        CMAKE_BUILD_TYPE STREQUAL "Release"))
     add_test(NAME size
         COMMAND ${CMAKE_COMMAND}
             -DBINARY=$<TARGET_FILE:tinyambient>
@@ -267,11 +272,13 @@ add_test(NAME cli
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)
 
 # Config persistence, status output, and portable mode (PRD FR-06, FR-08,
-# FR-11, FR-13). Runs against a sandboxed XDG_CONFIG_HOME/APPDATA.
+# FR-11, FR-13). Runs against a sandboxed XDG_CONFIG_HOME/APPDATA. The expected
+# version is passed in from the project so a bump cannot desync the test.
 add_test(NAME config
     COMMAND ${CMAKE_COMMAND}
         -DBINARY=$<TARGET_FILE:tinyambient>
         -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DVERSION=${PROJECT_VERSION}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_check.cmake)
 
 # Spectrum and RMS gate for every noise type (PRD FR-02). Python is optional to

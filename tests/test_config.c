@@ -215,6 +215,43 @@ static void test_unknown_keys_survive_rewrite(void)
     CHECK(strcmp(out, expected) == 0);
 }
 
+static void test_comments_survive_rewrite(void)
+{
+    static const char original[] = "# top comment\n"
+                                   "[general]\n"
+                                   "noise=white\n"
+                                   "# keep me\n"
+                                   "future=42\n"
+                                   "; also keep me\n"
+                                   "[other]\n"
+                                   "; section comment\n"
+                                   "x=1\n";
+    wn_config cfg;
+    char out[512];
+    const char *general_extras;
+    const char *other_section;
+
+    wn_config_defaults(&cfg);
+    cfg.noise = WN_NOISE_WHITE;
+    (void)wn_config_format(&cfg, original, out, sizeof(out));
+
+    /* Comments are user content: deleting them on a rewrite is data loss. */
+    CHECK(strstr(out, "# top comment") != NULL);
+    CHECK(strstr(out, "# keep me") != NULL);
+    CHECK(strstr(out, "; also keep me") != NULL);
+    CHECK(strstr(out, "; section comment") != NULL);
+    CHECK(strstr(out, "future=42") != NULL);
+    CHECK(strstr(out, "x=1") != NULL);
+
+    /* Position: the preamble stays above [general], and general-section
+     * extras stay above any other section so they cannot drift into it. */
+    CHECK(strstr(out, "# top comment") < strstr(out, "[general]"));
+    general_extras = strstr(out, "future=42");
+    other_section = strstr(out, "[other]");
+    CHECK(general_extras != NULL && other_section != NULL &&
+          general_extras < other_section);
+}
+
 static void test_format_reports_truncation(void)
 {
     wn_config cfg;
@@ -245,6 +282,7 @@ int main(void)
     test_format_defaults();
     test_format_round_trip();
     test_unknown_keys_survive_rewrite();
+    test_comments_survive_rewrite();
     test_format_reports_truncation();
 
     if (failures != 0) {

@@ -62,6 +62,12 @@ Contract:
 - Repeating a single-valued option (`--noise`, `--volume`, `--stop-after`,
   `--render`, `--seconds`, `--seed`) is an error. Play/pause/toggle and
   mono/stereo may appear together; the last one wins, as rule 2 requires.
+- A `--render` value starting with `-` is rejected. Every other value option
+  rejects flag-like values through validation; render holds the same line
+  instead of silently writing a file named `--help`.
+- `wn_cmd_takes_value` reports which command names consume the next token.
+  `ui/cli.c` uses it for the rule-6 prescan so the value-skipping rules cannot
+  drift from the parser.
 - `wn_cmd_parse_line` splits a mutable buffer in place. `svalue` may point into
   that buffer, so the caller keeps it alive while applying the commands.
 
@@ -96,10 +102,13 @@ size_t wn_config_format(const wn_config *cfg, const char *original,
 - Parsing starts from defaults, so a missing key keeps its default. Section and
   key names are trimmed and compared case-insensitively; `#` and `;` start a
   comment line.
-- Unknown keys survive a rewrite. Unknown keys under `[general]` are emitted
+- Unknown keys and comments survive a rewrite. Lines before the first section
+  header are emitted first, above `[general]` (the parser ignores keys there,
+  so they stay inert). Comments and unknown keys under `[general]` are emitted
   after the four canonical keys, before any other section, so they cannot drift
-  into the section that follows them. Unknown sections are preserved after the
-  canonical block.
+  into the section that follows them. Other sections are preserved last, with
+  their headers, comments, and keys. Blank and malformed lines are normalized
+  away.
 - Malformed values fall back to the default for that key with a warning; they
   never abort startup. The first warning is kept.
 - `volume` is range-checked. `fade_ms` is clamped to 0-2000 on read.
@@ -207,7 +216,7 @@ The only file that includes `miniaudio.h` with `MINIAUDIO_IMPLEMENTATION`.
 - Callback: `ma_device *` to `wn_engine *` via `pUserData`; calls `wn_engine_render` and returns.
 - No allocation, locks, logging, or syscalls inside the callback.
 - The device and the forced context are static, never heap-allocated: a fixed address cannot be freed under a running callback.
-- `notificationCallback` runs on a miniaudio-owned thread and only stores `_Atomic int restart_requested`, for `stopped`, `rerouted`, and `interruption_began`. A `stopping` guard keeps our own `ma_device_uninit` from arming it.
+- `notificationCallback` runs on a miniaudio-owned thread and only stores `_Atomic int restart_requested`, for `stopped`, `rerouted`, and `interruption_began`. A `stopping` guard (`_Atomic`, relaxed — only the value matters, and a plain int would be a cross-thread data race) keeps our own `ma_device_uninit` from arming it.
 - `wn_audio_needs_restart` exposes the flag. The backoff loop (100 ms, 500 ms, 2 s, then every 5 s) belongs to `platform/` and lands in M7, because that is where the main loop is.
 - Parameters and `playing` survive a restart; resuming must not click (fades land in M6).
 - At M4 nothing in the shipped binary calls `wn_audio_start`, so `--gc-sections` still removes miniaudio entirely. `tests/play_check.c` is the harness that exercises the path, and the size it reports (about 86 KB of `.text`) is the real cost the binary will carry once M7 gives the device a caller.
@@ -291,6 +300,10 @@ precedence rules live in PRD section 7; do not duplicate them here.
 - A prescan honours `--help` and `--version` before the full parse, so they win
   over an otherwise invalid argument list. The prescan skips the value of a
   value-taking option (`--noise help` is a bad noise name, not a help request).
+  The skip list is `wn_cmd_takes_value` from `core/command.c`, so it cannot
+  drift from the parser. A value is skipped only for a command the parser
+  recognizes; after an unrecognized token, help and version still win, exactly
+  as they do after `--bogus` (rule 6).
 - `--status` prints exactly the six lines from PRD section 6, FR-08, in order,
   followed by one newline each. At M5 there is no daemon, so it always reports
   the no-daemon form: `playing=0`, `stop_after=off`, and the persisted settings.

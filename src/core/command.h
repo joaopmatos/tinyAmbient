@@ -63,4 +63,9 @@ int wn_cmd_parse_argv(int argc, const char *const *argv, wn_cmd *out, int cap,
 int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
                       size_t err_cap);
 
+/* True when the command name consumes the next token as its value. Matching is
+ * case-sensitive, exactly like wn_cmd_parse_argv. The precedence scan in
+ * ui/cli.c uses this so its value-skipping cannot drift from the parser. */
+int wn_cmd_takes_value(const char *name);
+
 #endif /* WN_CORE_COMMAND_H */

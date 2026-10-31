@@ -133,4 +133,64 @@ expect_hex(34 2 2000 "bits per sample")
 expect_hex(36 4 64617461 "data tag")
 expect_hex(40 4 00dc0500 "data size")
 
+# --- Channel identity (PRD FR-13) --------------------------------------------
+#
+# Mono duplicates the left channel, so within every frame the two float32
+# samples must be byte-identical. Stereo uses independent generators, so some
+# frame must differ. One second is 48000 frames, 16 hex characters each.
+
+set(MONO_FILE "${WORKDIR}/render_check_mono.raw")
+set(STEREO_FILE "${WORKDIR}/render_check_stereo.raw")
+
+execute_process(
+    COMMAND "${BINARY}" --render "${MONO_FILE}" --seconds 1 --seed 42 --mono
+    RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "render_check: mono render failed with ${result}")
+endif()
+
+file(READ "${MONO_FILE}" mono_hex HEX)
+string(LENGTH "${mono_hex}" mono_chars)
+math(EXPR mono_frames "${mono_chars} / 16")
+
+set(frame 0)
+while(frame LESS mono_frames)
+    math(EXPR left_start "${frame} * 16")
+    math(EXPR right_start "${left_start} + 8")
+    string(SUBSTRING "${mono_hex}" ${left_start} 8 left)
+    string(SUBSTRING "${mono_hex}" ${right_start} 8 right)
+    if(NOT left STREQUAL right)
+        message(FATAL_ERROR
+            "render_check: mono frame ${frame} differs between channels")
+    endif()
+    math(EXPR frame "${frame} + 1")
+endwhile()
+
+execute_process(
+    COMMAND "${BINARY}" --render "${STEREO_FILE}" --seconds 1 --seed 42
+    RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "render_check: stereo render failed with ${result}")
+endif()
+
+file(READ "${STEREO_FILE}" stereo_hex HEX)
+set(frame 0)
+set(stereo_differs 0)
+while(frame LESS 100)
+    math(EXPR left_start "${frame} * 16")
+    math(EXPR right_start "${left_start} + 8")
+    string(SUBSTRING "${stereo_hex}" ${left_start} 8 left)
+    string(SUBSTRING "${stereo_hex}" ${right_start} 8 right)
+    if(NOT left STREQUAL right)
+        set(stereo_differs 1)
+        break()
+    endif()
+    math(EXPR frame "${frame} + 1")
+endwhile()
+
+if(NOT stereo_differs)
+    message(FATAL_ERROR
+        "render_check: stereo render has identical channels")
+endif()
+
 message(STATUS "render_check: ok")

@@ -39,7 +39,10 @@ static int context_open;
  * thread. Only a flag crosses that boundary; the reinitialization itself happens
  * on the main thread (M7). */
 static _Atomic int restart_requested;
-static int stopping;
+/* Best-effort guard that keeps our own shutdown from arming restart_requested.
+ * Atomic because the notification thread reads it while the main thread writes
+ * it; a plain int is a data race. Relaxed is enough: only the value matters. */
+static _Atomic int stopping;
 
 /* Audio thread. Calls exactly one function: no allocation, no locks, no I/O. */
 static void data_callback(ma_device *dev, void *output, const void *input,
@@ -54,7 +57,7 @@ static void data_callback(ma_device *dev, void *output, const void *input,
  * interrupted, or rerouted; any of those means the main thread must rebuild it. */
 static void notification_callback(const ma_device_notification *notification)
 {
-    if (stopping) {
+    if (atomic_load_explicit(&stopping, memory_order_relaxed)) {
         return;
     }
 
@@ -105,7 +108,7 @@ int wn_audio_start(wn_engine *engine)
         return 0;
     }
 
-    stopping = 0;
+    atomic_store_explicit(&stopping, 0, memory_order_relaxed);
     config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;
     config.playback.channels = WN_CHANNELS;
@@ -151,9 +154,9 @@ void wn_audio_stop(void)
     /* ma_device_uninit stops the device and waits for an in-flight callback to
      * return, so the engine is safe to destroy afterwards. The `stopping` guard
      * stops our own shutdown from arming the restart flag. */
-    stopping = 1;
+    atomic_store_explicit(&stopping, 1, memory_order_relaxed);
     ma_device_uninit(&device);
-    stopping = 0;
+    atomic_store_explicit(&stopping, 0, memory_order_relaxed);
     device_open = 0;
 
     if (context_open) {

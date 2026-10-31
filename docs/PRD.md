@@ -173,6 +173,7 @@ Rules:
 5. Unknown flags, unknown noise names, and out-of-range values exit 2 with a one-line message.
 6. `--help` and `--version` take precedence over all other arguments.
 7. Content commands are forwarded to the daemon when it exists and executed by a new daemon when it does not. Both paths produce identical results.
+8. A `--render` path beginning with `-` is a usage error (exit 2), like a flag-like value for any other option.
 
 ## 8. Configuration file
 
@@ -193,7 +194,7 @@ fade_ms=250
 | `mono` | boolean | `false` | `true`, `false` |
 | `fade_ms` | integer | `250` | 0–2000 |
 
-Unknown keys are ignored and preserved on rewrite. Malformed values fall back to defaults with a warning on stderr.
+Unknown keys and comments are ignored and preserved on rewrite. Malformed values fall back to defaults with a warning on stderr.
 
 ## 9. Non-functional requirements
 
