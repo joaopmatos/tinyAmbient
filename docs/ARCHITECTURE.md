@@ -360,8 +360,9 @@ dispatch, and quit.
   once, and only after a successful save are the atomics written. A failed save
   therefore leaves the file and the audio state unchanged and replies
   `error 1 <message>`. Unsupported kinds reply `error 2 ...`.
-- **Quit** stops accepting and unlinks the socket before sending the final
-  `ok`, so a client that sees the reply can never observe a stale socket.
+- **Quit** stops accepting, unlinks the socket, and releases the lock before
+  sending the final `ok`, so a client that sees the reply can neither observe a
+  stale socket nor collide with this daemon while it stops the audio device.
 - SIGINT, SIGTERM, and SIGPIPE handling: the first two set an atomic quit flag
   from the handler (`signal()` plus a lock-free store, both async-signal-safe);
   the third is ignored so a vanished client cannot kill the daemon. Any thread
@@ -402,8 +403,10 @@ Single instance:
   failed start must never unlink a path that belongs to a live daemon; before
   the lock, `unlink` is not ours to call.
 - The socket is chmodded to `0600` explicitly, so the umask cannot widen it.
-- On quit, the listener is closed and the socket removed while the lock is still
-  held, then the last reply is sent. The next start sees a clean slate.
+- On quit, the listener is closed, the socket removed, and the lock released
+  while the current client is still open; the last reply follows. The next start
+  therefore sees a clean slate, and a start that races the teardown cannot be
+  refused while this daemon is still stopping the audio device.
 
 Protocol:
 

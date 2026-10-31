@@ -265,4 +265,16 @@ expect_status("status after quit" 0 brown 25 1)
 run_exe(quit)
 expect_ok("quit without a daemon")
 
+# --- A start right after quit must not collide with the leaving daemon -------
+#
+# The reply is the client's signal that the lock is free. The daemon used to
+# release it only after stopping the audio device, so a back-to-back restart was
+# refused with exit 3 whenever the teardown outlived the next process spawn.
+foreach(round RANGE 1 5)
+    run_exe()
+    expect_ok("start ${round} right after quit")
+    run_exe(quit)
+    expect_ok("quit ${round}")
+endforeach()
+
 message(STATUS "ipc_check: ok")

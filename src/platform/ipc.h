@@ -45,10 +45,13 @@ int wn_ipc_server_reply(wn_ipc_server *s, const char *text);
 /* Closes the current client without replying. */
 void wn_ipc_server_drop(wn_ipc_server *s);
 
-/* Stops accepting and removes the socket while keeping the current client open.
- * The quit path calls it before sending the final reply, so a client that sees
- * the reply can never observe a stale socket. */
-void wn_ipc_server_stop_accepting(wn_ipc_server *s);
+/* Gives up the address while keeping the current client open: stops accepting,
+ * removes the socket, and releases the single-instance lock. The quit path calls
+ * it before sending the final reply, so a client that sees the reply can never
+ * observe a stale socket and can start the next daemon immediately. Holding the
+ * lock past the reply would make that start fail with "another daemon is
+ * already running" while this one is still tearing the audio device down. */
+void wn_ipc_server_release(wn_ipc_server *s);
 
 /* Removes the socket, releases the lock, frees the handle. */
 void wn_ipc_server_close(wn_ipc_server *s);

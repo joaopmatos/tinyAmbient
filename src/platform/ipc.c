@@ -427,7 +427,7 @@ void wn_ipc_server_drop(wn_ipc_server *s)
     }
 }
 
-void wn_ipc_server_stop_accepting(wn_ipc_server *s)
+void wn_ipc_server_release(wn_ipc_server *s)
 {
     if (s == NULL) {
         return;
@@ -440,6 +440,15 @@ void wn_ipc_server_stop_accepting(wn_ipc_server *s)
         (void)unlink(s->path);
         s->path[0] = '\0';
     }
+    /* The lock exists only to protect the socket path, and the path is gone.
+     * Releasing it here rather than in close() keeps the quit reply honest: the
+     * reply is the client's signal that it may start a new daemon, and that
+     * start must not collide with this one while it stops the audio device. */
+    if (s->lock_fd >= 0) {
+        (void)flock(s->lock_fd, LOCK_UN);
+        (void)close(s->lock_fd);
+        s->lock_fd = -1;
+    }
 }
 
 void wn_ipc_server_close(wn_ipc_server *s)
@@ -447,13 +456,8 @@ void wn_ipc_server_close(wn_ipc_server *s)
     if (s == NULL) {
         return;
     }
-    wn_ipc_server_stop_accepting(s);
+    wn_ipc_server_release(s);
     wn_ipc_server_drop(s);
-    if (s->lock_fd >= 0) {
-        (void)flock(s->lock_fd, LOCK_UN);
-        (void)close(s->lock_fd);
-        s->lock_fd = -1;
-    }
     free(s);
 }
 

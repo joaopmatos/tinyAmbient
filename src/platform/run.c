@@ -122,8 +122,13 @@ static void notify_ready(wn_session *s, int ok)
     (void)_close(s->ready_fd);
 #else
     char byte = ok ? 0 : 1;
+    ssize_t written;
 
-    (void)write(s->ready_fd, &byte, 1);
+    /* A failed write needs no recovery: the parent sees EOF and reports the
+     * same failure. The result is stored only because GCC's
+     * warn_unused_result rejects a bare `(void)` cast. */
+    written = write(s->ready_fd, &byte, 1);
+    (void)written;
     (void)close(s->ready_fd);
 #endif
     s->ready_fd = -1;
@@ -370,10 +375,11 @@ int wn_platform_run(wn_engine *e, wn_session *s)
                 int want_quit = handle_line(e, s, &deadline, line, now_ms(),
                                             reply, sizeof(reply));
 
-                /* Remove the socket before the final reply, so the client
-                 * cannot observe a socket whose daemon is already leaving. */
+                /* Remove the socket and release the lock before the final reply,
+                 * so the client can start the next daemon as soon as it sees
+                 * the reply. */
                 if (want_quit) {
-                    wn_ipc_server_stop_accepting(s->ipc);
+                    wn_ipc_server_release(s->ipc);
                 }
                 (void)wn_ipc_server_reply(s->ipc, reply);
                 if (want_quit) {

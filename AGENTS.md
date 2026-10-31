@@ -265,7 +265,7 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 - **Windows console:** subsystem choice is deferred to M8 by the PRD.
 - **`--status` with no daemon:** query IPC first; on `WN_IPC_ABSENT`, read config and report `playing=0` and `stop_after=off`, exit 0. Never start a daemon for status.
 - **Single instance:** take the `flock` on the lock file before unlinking a stale socket or binding. Unlinking before the lock is held cuts a live daemon off from its clients.
-- **Socket cleanup on quit:** stop accepting and unlink before sending the final reply, so a client that sees `ok` never observes a stale socket.
+- **Socket cleanup on quit:** stop accepting, unlink, and release the lock before sending the final reply, so a client that sees `ok` never observes a stale socket and a start issued right after `quit` is not refused while the old daemon is still stopping the device.
 - **Client races with quit:** a connection can be accepted while the daemon is leaving; retry a connection that closes without a reply, then treat a missing socket as "start a daemon".
 - **Forwarded errors:** the daemon replies `error <exit-code> <message>`; the client prints the message and exits with that code, so a failed daemon-side config write stays exit 1 and an invalid command stays exit 2.
 - **Windows IPC:** `wn_platform_ipc_supported()` is 0 until M8; content commands persist in-process there rather than pretending the daemon exists.
