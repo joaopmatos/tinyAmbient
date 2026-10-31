@@ -257,8 +257,8 @@ M0–M7 constitute the Linux release. M8 closes v1.
 |---|---|---|
 | miniaudio grows between versions | Size gate breach | Pin the version, measure every milestone |
 | ALSA/Pulse absent on target system | No audio | Fall back to the other backend, report a clear error |
-| Windows console subsystem choice | Console flashes on background start | Decide at M8: console subsystem with `AttachConsole`, or `-mwindows` with a detached start path |
-| Float filter drift across platforms | Spectrum test failures on Windows | Validate slopes on both platforms at M8 |
+| Windows console subsystem choice | Console flashes on background start | Resolved at M8: console subsystem, with `DETACHED_PROCESS` for the daemon. A GUI subsystem would need `AttachConsole` before any `--status` output |
+| Float filter drift across platforms | Spectrum test failures on Windows | Resolved at M8: the spectrum gate runs and passes on the Windows runner |
 | Scope creep toward tray or autostart | Delayed release | Both are explicitly out of scope in section 5 |
 | Config path collisions in portable mode | Shared state between copies | Portable mode requires a writable executable directory; fail with a clear error otherwise |
 
@@ -281,7 +281,7 @@ M0–M7 constitute the Linux release. M8 closes v1.
 | D-13 | `sleep_minutes` dropped from config; timer is session state | Decided |
 | D-14 | Default stereo uses independent per-channel generators | Decided |
 | D-15 | Repository license | Open |
-| D-16 | IPC and the detached daemon are POSIX-only at M7; Windows named pipes and daemon startup are part of the M8 parity pass, and Windows keeps in-process persistence until then | Decided |
+| D-16 | Windows IPC and daemon startup land at M8: named pipes with a per-user DACL, and a detached copy of the executable instead of a fork | Decided |
 
 ## 14. Open questions
 

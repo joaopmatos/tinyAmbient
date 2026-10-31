@@ -144,6 +144,11 @@ add_library(ta_platform STATIC
     src/platform/ipc.c
     src/platform/run.c)
 target_link_libraries(ta_platform PUBLIC ta_core)
+if(WIN32)
+    # OpenProcessToken, GetTokenInformation, and ConvertSidToStringSidA: the IPC
+    # pipe's per-user name and DACL.
+    target_link_libraries(ta_platform PUBLIC advapi32)
+endif()
 ta_warnings(ta_platform)
 ta_c11(ta_platform)
 ta_sanitize(ta_platform)
@@ -311,16 +316,19 @@ add_test(NAME config
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_check.cmake)
 
 # IPC, single instance, and forwarded commands (PRD FR-07, FR-08, FR-09).
-# POSIX only: it inspects /proc, socket modes, and wall-clock latency, all of
-# which belong to the Linux release. Windows coverage comes from the M8 pass.
+# Two harnesses: the POSIX one also inspects /proc, socket modes, and wall-clock
+# latency; the Windows one asserts the observable contract over a private pipe.
 if(UNIX)
-    add_test(NAME ipc
-        COMMAND ${CMAKE_COMMAND}
-            -DBINARY=$<TARGET_FILE:tinyambient>
-            -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
-            -DVERSION=${PROJECT_VERSION}
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_check.cmake)
+    set(TA_IPC_CHECK tests/ipc_check.cmake)
+else()
+    set(TA_IPC_CHECK tests/ipc_check_win.cmake)
 endif()
+add_test(NAME ipc
+    COMMAND ${CMAKE_COMMAND}
+        -DBINARY=$<TARGET_FILE:tinyambient>
+        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DVERSION=${PROJECT_VERSION}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/${TA_IPC_CHECK})
 
 # Spectrum and RMS gate for every noise type (PRD FR-02). Python is optional to
 # build but required to verify the product, so a missing interpreter is a

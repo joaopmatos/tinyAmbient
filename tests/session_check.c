@@ -8,7 +8,8 @@
  *
  * Not part of the shipped binary. POSIX only: the harness needs a second thread
  * to observe a loop that is supposed to keep running, and MSVC has no C11
- * threads; Windows coverage comes from the M8 parity pass. */
+ * threads. Windows covers the same behaviour through the IPC test, which drives
+ * a real daemon. */
 
 #define _POSIX_C_SOURCE 200809L
 

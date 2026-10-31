@@ -23,7 +23,15 @@ int wn_paths_make_config_dir(const char *file, int portable, char *err,
                              size_t err_cap);
 
 /* <runtime-dir>/tinyambient.sock on Linux: $XDG_RUNTIME_DIR when set, otherwise
- * /tmp/tinyambient-<uid>.sock. Windows named pipes land in M8. */
+ * /tmp/tinyambient-<uid>.sock. On Windows: \\.\pipe\tinyambient-<sid>, or
+ * $TINYAMBIENT_IPC when the test suite needs a private pipe. */
 int wn_paths_ipc_address(char *out, size_t cap);
+
+#if defined(_WIN32)
+/* Returns a heap copy of the current user's SID, for the DACL that restricts
+ * the IPC pipe to that user. Free with free(). Declared as void* so including
+ * this header does not pull in windows.h. */
+void *wn_paths_user_sid(void);
+#endif
 
 #endif /* WN_PLATFORM_PATHS_H */

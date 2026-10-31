@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M7 complete. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, Unix-socket IPC, single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows still keeps content commands in-process; the named pipe lands with M8.
+**State:** M8 complete; v1 is done. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, IPC on both platforms (Unix socket on Linux, per-user named pipe on Windows), single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows runs the same daemon, IPC, and test suite as Linux.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -66,7 +66,8 @@ tests/
   test_status.c
   play_check.c           # device harness, runs under the null backend
   session_check.c        # run-loop harness: stop-after, quit (POSIX only)
-  ipc_check.cmake        # daemon, forwarding, single instance (POSIX only)
+  ipc_check.cmake        # daemon, forwarding, single instance (POSIX)
+  ipc_check_win.cmake    # the same contract over a named pipe (Windows)
   check_spectrum.py      # slopes/RMS over raw or WAV
 third_party/
   miniaudio.h
@@ -74,7 +75,7 @@ docs/
   PRD.md  ARCHITECTURE.md
 ```
 
-Tests grow per milestone; the list above is the M7 target.
+Tests grow per milestone; the list above is the M8 target.
 
 ### Layer rules
 
@@ -213,6 +214,8 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | M5 | M4 + full parser, engine commands, INI config, atomic writes, portable mode, status | 23 KB | 150 KB |
 | M6 | M5 + parameter atomics, fades, crossfades, stop-after timer, device restart backoff, `--foreground` | 108 KB | 150 KB |
 | M7 | M6 + Unix socket, single instance, detached daemon, forwarding, daemon-side persistence | 116 KB | 150 KB |
+| M8 | M7 + Windows named pipe, per-user ACL, detached daemon, Windows IPC test | 116 KB Linux | 150 KB |
+| M8 | Windows 10/11, MSVC 19, `/MT /O1 /GL` | see the M8 note | 300 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
@@ -221,6 +224,8 @@ M5 note: the file grew from 15,248 to 23,608 bytes (+8,360). `.text` is 15,529 b
 M6 note: the file grew from 23,608 to 110,120 bytes (+84.5 KB). This is the milestone where the product binary starts calling `wn_audio_start`, so miniaudio and the ALSA/Pulse backends stop being garbage-collected; the M4 probe already measured about 91 KB of `.text` for that path. The run loop, the fades, and `--foreground` add roughly 10 KB on top. `.text` is 101,307 bytes, `.data` 1,228, `.bss` 4,896. `ldd` still lists neither `libasound` nor `libpulse`.
 
 M7 note: the file grew from 110,120 to 118,472 bytes (+8,352). `.text` is 108,037 bytes, `.data` 1,380, `.bss` 4,896. The cost is the socket server and client, the flock-based single-instance guard, the detach path with its readiness pipe, and the daemon-side command dispatch and persistence. `fork`, `poll`, and the socket calls are libc, so nothing new is linked; `ldd` still lists neither `libasound` nor `libpulse`.
+
+M8 note: the Linux file did not move (118,472 bytes); `.text` grew by 180 bytes to 108,217 because the Windows branch is preprocessed out and only the `reply_and_release` path is new. The Windows figure comes from the CI job, which prints it before the size gate; the budget is 300 KB and the estimate was 200-250 KB. `advapi32` is the only new import, for the token and SID calls behind the pipe name and DACL.
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
@@ -244,8 +249,8 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 
 - **Linux:** link dynamically against libc, load audio backends with `dlopen`. Do not attempt static musl plus ALSA.
 - **Windows:** `/MT` to avoid the VC++ Redistributable; `/O1 /GL /Gy /OPT:REF /OPT:ICF`. Own code needs `/std:c11 /experimental:c11atomics`: MSVC refuses `<stdatomic.h>` without the explicit atomic opt-in, and `CMAKE_C_STANDARD` alone does not add it.
-- **CI:** Ubuntu + Windows matrix, plus a third job that builds with ASan and UBSan (`-DTA_SANITIZE=ON`). Linux installs `alsa-lib-devel`/`libasound2-dev` and `libpulse-dev`. No runner has an audio device, so `audio/` is exercised through miniaudio's null backend (`TINYAMBIENT_AUDIO=null`) and everything else through offline renders. The run-loop test (`tests/session_check.c`) is POSIX-only: it needs a second thread to observe a loop that must keep running, and MSVC has no C11 threads. The IPC test (`tests/ipc_check.cmake`) is POSIX-only for the same reason: it inspects `/proc`, socket modes, and wall-clock latency.
-- **Windows IPC:** named pipes with a per-user ACL land at M8. Until then the Windows build compiles `platform/ipc.c` as a stub and the CLI keeps settings commands in-process; `--foreground` still works, and session commands report that the daemon is unavailable.
+- **CI:** Ubuntu + Windows matrix, plus a third job that builds with ASan and UBSan (`-DTA_SANITIZE=ON`). Linux installs `alsa-lib-devel`/`libasound2-dev` and `libpulse-dev`. No runner has an audio device, so `audio/` is exercised through miniaudio's null backend (`TINYAMBIENT_AUDIO=null`) and everything else through offline renders. The run-loop test (`tests/session_check.c`) is POSIX-only: it needs a second thread to observe a loop that must keep running, and MSVC has no C11 threads. The IPC contract has one harness per platform: `tests/ipc_check.cmake` inspects `/proc`, socket modes, and wall-clock latency; `tests/ipc_check_win.cmake` asserts the same forwarded-command behaviour over a private named pipe.
+- **Windows IPC:** named pipes at `\\.\pipe\tinyambient-<sid>` with a DACL that grants the current user only. `CreateNamedPipe` with `nMaxInstances = 1` is the single-instance guard, so there is no lock file. The daemon is a detached copy of the executable (`DETACHED_PROCESS`) that re-runs the same arguments behind an internal `--daemon-child <event-handle>` switch; the parent waits on the inherited event, which the child signals once the device is up. `TINYAMBIENT_IPC` overrides the pipe name so the tests never touch a real session.
 
 - **Sanitizers locally:** Fedora ships the sanitizer runtimes separately. `sudo dnf install libasan libubsan`, then configure with `-DTA_SANITIZE=ON`. Without those packages the build links but the binary cannot run.
 
@@ -262,19 +267,20 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 - **Strings:** always `snprintf`; never `strcpy`/`strcat`.
 - **Contaminated core:** if `core/` includes an OS header, the architecture has failed.
 - **CMake + Objective-C:** irrelevant in v1; do not reintroduce `.m` files.
-- **Windows console:** subsystem choice is deferred to M8 by the PRD.
+- **Windows console:** the console subsystem stays. The CLI is the only entry point in v1 (no tray, no autostart, no shortcut), and a GUI-subsystem binary would need `AttachConsole` to print `--status` or `--help` at all. The daemon is started with `DETACHED_PROCESS`, so a background start allocates no console. A double-click from Explorer flashes the parent's console window for the duration of the start; that is the accepted trade.
 - **`--status` with no daemon:** query IPC first; on `WN_IPC_ABSENT`, read config and report `playing=0` and `stop_after=off`, exit 0. Never start a daemon for status.
 - **Single instance:** take the `flock` on the lock file before unlinking a stale socket or binding. Unlinking before the lock is held cuts a live daemon off from its clients.
 - **Socket cleanup on quit:** stop accepting, unlink, and release the lock before sending the final reply, so a client that sees `ok` never observes a stale socket and a start issued right after `quit` is not refused while the old daemon is still stopping the device.
 - **Client races with quit:** a connection can be accepted while the daemon is leaving; retry a connection that closes without a reply, then treat a missing socket as "start a daemon".
 - **Forwarded errors:** the daemon replies `error <exit-code> <message>`; the client prints the message and exits with that code, so a failed daemon-side config write stays exit 1 and an invalid command stays exit 2.
-- **Windows IPC:** `wn_platform_ipc_supported()` is 0 until M8; content commands persist in-process there rather than pretending the daemon exists.
+- **Windows IPC:** the pipe instance is the connection, so the quit reply must be written and flushed before the instance is destroyed. `wn_ipc_server_reply_and_release` owns that ordering per platform; do not call `wn_ipc_server_release` before the reply on Windows, or the client sees a broken pipe instead of `ok`.
+- **Windows daemon start:** the child re-runs the parent's arguments. Everything it does must be deterministic from those arguments plus the saved configuration, or the two paths diverge. `--render` never reaches this path, so the arguments are flags, noise names, and integers that need no command-line quoting.
 
 ---
 
 ## 6. Working rules
 
-1. One milestone at a time, in PRD order. Do not jump to M8.
+1. One milestone at a time, in PRD order. M8 closes v1; anything beyond it needs a PRD change first.
 2. Small diffs; build and test after each one.
 3. Do not add dependencies or widen scope (tray, network, presets, hotkeys, GUI) without asking.
 4. Prefer fixed buffers, `snprintf`, and explicit bounds checks.

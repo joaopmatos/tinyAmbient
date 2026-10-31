@@ -502,24 +502,19 @@ static int run_foreground(const wn_cmd *cmds, int n, int portable)
     return WN_EXIT_OK;
 }
 
-/* Background daemon: bind the single-instance socket, fork, and let the child
- * run the loop. The parent returns as soon as the child reports that the audio
- * device is up, so a first start still fails with exit 1 and a clear message
- * when no device exists (PRD FR-14, FR-09). */
-static int run_background(const wn_cmd *cmds, int n, int portable)
+/* Background daemon: bind the single-instance address, detach, and let the
+ * daemon run the loop. The parent returns as soon as the daemon reports that
+ * the audio device is up, so a first start still fails with exit 1 and a clear
+ * message when no device exists (PRD FR-14, FR-09). */
+static int run_background(const wn_cmd *cmds, int n, int portable, int argc,
+                          const char *const *argv)
 {
     session_setup setup;
     wn_session session;
     wn_engine *engine;
     char err[160];
-    int ready_fd = -1;
+    intptr_t ready_fd = -1;
     int result;
-
-    if (!wn_platform_ipc_supported()) {
-        wn_cli_error("the background daemon requires Windows parity (M8); "
-                     "use --foreground");
-        return WN_EXIT_RUNTIME;
-    }
 
     result = prepare_session(cmds, n, portable, &setup);
     if (result != WN_EXIT_OK) {
@@ -531,14 +526,21 @@ static int run_background(const wn_cmd *cmds, int n, int portable)
     engine = setup.engine;
 
     fill_session(&session, &setup, portable, 0);
+
+#if !defined(_WIN32)
+    /* The forking parent takes the socket and the lock before the fork, so the
+     * address is owned from the moment the client gives up. Windows cannot
+     * inherit this process's handles into a fresh process that way, so its
+     * daemon creates the pipe itself. */
     session.ipc = wn_ipc_server_open(err, sizeof(err));
     if (session.ipc == NULL) {
         wn_cli_error(err);
         wn_engine_destroy(engine);
         return WN_EXIT_IPC;
     }
+#endif
 
-    result = wn_platform_detach(&ready_fd, err, sizeof(err));
+    result = wn_platform_detach(argc, argv, &ready_fd, err, sizeof(err));
     if (result == WN_DETACH_ERROR) {
         wn_cli_error(err);
         wn_ipc_server_close(session.ipc);
@@ -563,7 +565,7 @@ static int run_background(const wn_cmd *cmds, int n, int portable)
         return WN_EXIT_RUNTIME;
     }
 
-    /* Child. */
+    /* Child (POSIX only; Windows never returns WN_DETACH_CHILD). */
     session.ready_fd = ready_fd;
     result = wn_platform_run(engine, &session);
     wn_engine_destroy(engine);
@@ -573,6 +575,45 @@ static int run_background(const wn_cmd *cmds, int n, int portable)
     }
     return WN_EXIT_OK;
 }
+
+#if defined(_WIN32)
+/* The detached child: the parent cannot pass memory across CreateProcess, so
+ * the child re-runs the same arguments. The persisted settings were already
+ * saved by the parent and every remaining step is deterministic, so the session
+ * is the one a forked child would have inherited. */
+static int run_daemon_child(const wn_cmd *cmds, int n, int portable,
+                            intptr_t ready_fd)
+{
+    session_setup setup;
+    wn_session session;
+    wn_engine *engine;
+    char err[160];
+    int result;
+
+    result = prepare_session(cmds, n, portable, &setup);
+    if (result != WN_EXIT_OK) {
+        return result;
+    }
+    if (setup.quit_only) {
+        return WN_EXIT_OK;
+    }
+    engine = setup.engine;
+
+    fill_session(&session, &setup, portable, 0);
+    session.ready_fd = ready_fd;
+    session.ipc = wn_ipc_server_open(err, sizeof(err));
+    if (session.ipc == NULL) {
+        wn_cli_error(err);
+        wn_engine_destroy(engine);
+        return WN_EXIT_IPC;
+    }
+
+    result = wn_platform_run(engine, &session);
+    wn_engine_destroy(engine);
+
+    return result != 0 ? WN_EXIT_RUNTIME : WN_EXIT_OK;
+}
+#endif
 
 /* --- Forwarded replies ----------------------------------------------------- */
 
@@ -629,33 +670,6 @@ static int has_kind(const wn_cmd *cmds, int n, wn_cmd_kind kind)
     return 0;
 }
 
-/* M6 behavior for platforms without IPC yet: settings persist in-process and
- * session commands have no daemon to reach. Windows uses this until M8. */
-static int persist_in_process(const wn_cmd *cmds, int n, int portable)
-{
-    wn_config cfg;
-    char path[WN_PATH_MAX];
-    char text[WN_CONFIG_TEXT_MAX];
-    size_t text_len = 0;
-    int result;
-    int i;
-
-    result = resolve_config_path(path, sizeof(path), portable);
-    if (result != WN_EXIT_OK) {
-        return result;
-    }
-    result = load_config_file(path, &cfg, text, &text_len);
-    if (result != WN_EXIT_OK) {
-        return result;
-    }
-
-    for (i = 0; i < n; i++) {
-        apply_persisted(&cfg, &cmds[i]);
-    }
-
-    return save_config_file(path, &cfg, text_len > 0 ? text : NULL, portable);
-}
-
 int wn_cli_main(int argc, const char *const *argv)
 {
     wn_cmd cmds[WN_CMD_MAX];
@@ -671,8 +685,6 @@ int wn_cli_main(int argc, const char *const *argv)
     int mono = 0;
     int have_render = 0;
     int have_status = 0;
-    int have_persist = 0;
-    int have_session = 0;
     int have_foreground = 0;
     int portable = 0;
     int want_help = 0;
@@ -680,6 +692,21 @@ int wn_cli_main(int argc, const char *const *argv)
     int result;
     int n;
     int i;
+
+#if defined(_WIN32)
+    int child_mode = 0;
+    intptr_t child_ready = -1;
+
+    /* Internal: the detached daemon is this same program with a readiness event
+     * and the original arguments behind it. Stripping the two tokens leaves
+     * argv[0] in place, so everything below is the normal path. */
+    if (argc >= 3 && strcmp(argv[1], "--daemon-child") == 0) {
+        child_ready = (intptr_t)strtoull(argv[2], NULL, 10);
+        child_mode = 1;
+        argv += 2;
+        argc -= 2;
+    }
+#endif
 
     scan_precedence(argc, argv, &want_help, &want_version);
     if (want_help) {
@@ -745,23 +772,16 @@ int wn_cli_main(int argc, const char *const *argv)
             case WN_CMD_FOREGROUND:
                 have_foreground = 1;
                 break;
-            case WN_CMD_PLAY:
-            case WN_CMD_PAUSE:
-            case WN_CMD_TOGGLE:
-            case WN_CMD_STOP_AFTER:
-            case WN_CMD_QUIT:
-                have_session = 1;
-                break;
-            case WN_CMD_NOISE:
-            case WN_CMD_VOLUME:
-            case WN_CMD_MONO:
-            case WN_CMD_STEREO:
-                have_persist = 1;
-                break;
             default:
                 break;
         }
     }
+
+#if defined(_WIN32)
+    if (child_mode) {
+        return run_daemon_child(cmds, n, portable, child_ready);
+    }
+#endif
 
     if (have_status) {
         char reply[WN_IPC_REPLY_MAX];
@@ -838,17 +858,6 @@ int wn_cli_main(int argc, const char *const *argv)
             return WN_EXIT_OK;
         }
 
-        if (!wn_platform_ipc_supported()) {
-            /* Windows until the M8 parity pass: settings persist in-process,
-             * everything that needs a daemon reports it. */
-            if (have_persist && !have_session) {
-                return persist_in_process(cmds, n, portable);
-            }
-            wn_cli_error("the background daemon requires Windows parity (M8); "
-                         "use --foreground");
-            return WN_EXIT_RUNTIME;
-        }
-
-        return run_background(cmds, n, portable);
+        return run_background(cmds, n, portable, argc, argv);
     }
 }

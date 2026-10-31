@@ -29,62 +29,416 @@
 
 #if defined(_WIN32)
 
+#include <windows.h>
+
+/* A byte-mode named pipe is the Windows equivalent of the Unix socket: one line
+ * in, one reply out, then the instance disconnects and listens again. */
+#define WN_PIPE_BUFFER 4096
+
+/* Same contract as the POSIX branch: a connection that dies before any reply
+ * means the daemon was leaving, and the caller may try again. */
+#define WN_IPC_RETRY 2
+
+struct wn_ipc_server {
+    HANDLE pipe;
+    HANDLE event;
+    OVERLAPPED ov;
+    int pending;   /* ConnectNamedPipe has not completed yet */
+    int connected; /* a client is attached */
+    char path[WN_PATH_MAX];
+};
+
+/* One connect/send/receive round trip. Returns WN_IPC_OK, WN_IPC_ABSENT,
+ * WN_IPC_ERROR, or WN_IPC_RETRY. */
+static int client_attempt(const char *path, const char *line, char *reply,
+                          size_t cap)
+{
+    HANDLE pipe;
+    DWORD count = 0;
+    size_t length = strlen(line);
+    size_t used = 0;
+
+    pipe = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                       OPEN_EXISTING, 0, NULL);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+            return WN_IPC_ABSENT;
+        }
+        if (error != ERROR_PIPE_BUSY) {
+            return WN_IPC_ERROR;
+        }
+        /* A live daemon is between clients. Wait for its next listen. */
+        if (!WaitNamedPipeA(path, 100)) {
+            return WN_IPC_RETRY;
+        }
+        pipe = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                           OPEN_EXISTING, 0, NULL);
+        if (pipe == INVALID_HANDLE_VALUE) {
+            return WN_IPC_ERROR;
+        }
+    }
+
+    if (!WriteFile(pipe, line, (DWORD)length, &count, NULL) ||
+        count != (DWORD)length || !WriteFile(pipe, "\n", 1, &count, NULL) ||
+        count != 1) {
+        (void)CloseHandle(pipe);
+        return WN_IPC_ERROR;
+    }
+
+    while (used + 1 < cap) {
+        DWORD got = 0;
+
+        if (!ReadFile(pipe, reply + used, (DWORD)(cap - 1 - used), &got,
+                      NULL)) {
+            if (GetLastError() == ERROR_BROKEN_PIPE) {
+                break;
+            }
+            (void)CloseHandle(pipe);
+            return WN_IPC_ERROR;
+        }
+        if (got == 0) {
+            break;
+        }
+        used += got;
+        if (memchr(reply, '\n', used) != NULL) {
+            break;
+        }
+    }
+    reply[used] = '\0';
+    (void)CloseHandle(pipe);
+
+    if (used == 0) {
+        return WN_IPC_RETRY;
+    }
+    return WN_IPC_OK;
+}
+
 int wn_ipc_client_send(const char *line, char *reply, size_t cap)
 {
-    (void)line;
-    (void)reply;
-    (void)cap;
-    /* Behave like a platform with no daemon: status falls back to the config
-     * and content commands take the in-process path. */
+    char path[WN_PATH_MAX];
+    int attempt;
+
+    if (line == NULL || reply == NULL || cap == 0) {
+        return WN_IPC_ERROR;
+    }
+    reply[0] = '\0';
+
+    if (wn_paths_ipc_address(path, sizeof(path)) != 0) {
+        return WN_IPC_ERROR;
+    }
+
+    for (attempt = 0; attempt < 3; attempt++) {
+        int result = client_attempt(path, line, reply, cap);
+
+        if (result != WN_IPC_RETRY) {
+            return result;
+        }
+        if (attempt < 2) {
+            Sleep(20);
+        }
+    }
+
     return WN_IPC_ABSENT;
+}
+
+/* Builds the SECURITY_ATTRIBUTES that restrict the pipe to the current user.
+ * `storage` holds the ACL and must outlive the CreateNamedPipe call. */
+static int build_security(SECURITY_ATTRIBUTES *sa, SECURITY_DESCRIPTOR *sd,
+                          DWORD *storage, size_t storage_bytes)
+{
+    void *sid;
+    int result = -1;
+
+    sid = wn_paths_user_sid();
+    if (sid == NULL) {
+        return -1;
+    }
+
+    if (InitializeAcl((PACL)storage, (DWORD)storage_bytes, ACL_REVISION) &&
+        AddAccessAllowedAce((PACL)storage, ACL_REVISION, GENERIC_ALL,
+                            (PSID)sid) &&
+        InitializeSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION) &&
+        SetSecurityDescriptorDacl(sd, TRUE, (PACL)storage, FALSE)) {
+        sa->nLength = sizeof(*sa);
+        sa->lpSecurityDescriptor = sd;
+        sa->bInheritHandle = FALSE;
+        result = 0;
+    }
+
+    free(sid);
+    return result;
 }
 
 wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
 {
-    (void)snprintf(err, err_cap,
-                   "IPC requires Windows parity, which lands in M8");
+    SECURITY_ATTRIBUTES sa;
+    SECURITY_DESCRIPTOR sd;
+    DWORD acl[64];
+    wn_ipc_server *s;
+    char name[WN_PATH_MAX];
+
+    s = calloc(1, sizeof(*s));
+    if (s == NULL) {
+        (void)snprintf(err, err_cap, "out of memory");
+        return NULL;
+    }
+    s->pipe = INVALID_HANDLE_VALUE;
+    s->event = INVALID_HANDLE_VALUE;
+
+    if (wn_paths_ipc_address(name, sizeof(name)) != 0) {
+        (void)snprintf(err, err_cap, "cannot resolve the IPC pipe name");
+        goto fail;
+    }
+    if (build_security(&sa, &sd, acl, sizeof(acl)) != 0) {
+        (void)snprintf(err, err_cap,
+                       "cannot restrict the IPC pipe to the current user");
+        goto fail;
+    }
+
+    /* One instance is the single-instance lock: while this pipe exists no
+     * second daemon can create the same name. */
+    s->pipe = CreateNamedPipeA(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                               PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                               1, WN_PIPE_BUFFER, WN_PIPE_BUFFER, 0, &sa);
+    if (s->pipe == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+
+        if (error == ERROR_ACCESS_DENIED || error == ERROR_PIPE_BUSY) {
+            (void)snprintf(err, err_cap, "another daemon is already running");
+        } else {
+            (void)snprintf(err, err_cap, "cannot create the IPC pipe");
+        }
+        goto fail;
+    }
+
+    s->event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (s->event == NULL) {
+        (void)snprintf(err, err_cap, "cannot create the IPC event");
+        goto fail;
+    }
+    s->ov.hEvent = s->event;
+    (void)snprintf(s->path, sizeof(s->path), "%s", name);
+    return s;
+
+fail:
+    wn_ipc_server_close(s);
     return NULL;
 }
 
 int wn_ipc_server_wait(wn_ipc_server *s, char *line, size_t cap, int timeout_ms)
 {
-    (void)s;
-    (void)line;
-    (void)cap;
-    (void)timeout_ms;
-    return -1;
+    DWORD count = 0;
+    DWORD wait;
+    size_t used = 0;
+
+    if (s == NULL || line == NULL || cap == 0 ||
+        s->pipe == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+
+    if (!s->connected) {
+        if (!s->pending) {
+            (void)ResetEvent(s->event);
+            if (!ConnectNamedPipe(s->pipe, &s->ov)) {
+                DWORD error = GetLastError();
+
+                if (error == ERROR_IO_PENDING) {
+                    s->pending = 1;
+                } else if (error == ERROR_PIPE_CONNECTED) {
+                    s->connected = 1;
+                } else if (error == ERROR_NO_DATA) {
+                    /* The previous client vanished before the disconnect. */
+                    (void)DisconnectNamedPipe(s->pipe);
+                    return 0;
+                } else {
+                    return -1;
+                }
+            } else {
+                s->connected = 1;
+            }
+        }
+
+        if (!s->connected) {
+            wait = WaitForSingleObject(s->event, (DWORD)timeout_ms);
+            if (wait == WAIT_TIMEOUT) {
+                return 0;
+            }
+            if (wait != WAIT_OBJECT_0) {
+                s->pending = 0;
+                return -1;
+            }
+            if (!GetOverlappedResult(s->pipe, &s->ov, &count, FALSE) &&
+                GetLastError() != ERROR_PIPE_CONNECTED) {
+                s->pending = 0;
+                return -1;
+            }
+            s->pending = 0;
+            s->connected = 1;
+            (void)ResetEvent(s->event);
+        }
+    }
+
+    /* The client sends the whole line before it starts reading, so this
+     * normally completes at once. The timeout only bounds a client that
+     * connects and then stalls, exactly like the POSIX receive timeout. */
+    while (used + 1 < cap) {
+        DWORD got = 0;
+
+        (void)ResetEvent(s->event);
+        if (!ReadFile(s->pipe, line + used, (DWORD)(cap - 1 - used), &got,
+                      &s->ov)) {
+            DWORD error = GetLastError();
+
+            if (error == ERROR_IO_PENDING) {
+                wait = WaitForSingleObject(s->event, 200);
+                if (wait != WAIT_OBJECT_0 ||
+                    !GetOverlappedResult(s->pipe, &s->ov, &got, FALSE)) {
+                    wn_ipc_server_drop(s);
+                    return 0;
+                }
+            } else if (error == ERROR_BROKEN_PIPE ||
+                       error == ERROR_PIPE_NOT_CONNECTED) {
+                wn_ipc_server_drop(s);
+                return 0;
+            } else {
+                wn_ipc_server_drop(s);
+                return -1;
+            }
+        }
+        if (got == 0) {
+            wn_ipc_server_drop(s);
+            return 0;
+        }
+        used += got;
+        if (memchr(line, '\n', used) != NULL) {
+            break;
+        }
+    }
+    line[used] = '\0';
+
+    {
+        char *newline = strchr(line, '\n');
+
+        if (newline == NULL) {
+            wn_ipc_server_drop(s);
+            return 0;
+        }
+        *newline = '\0';
+        newline = strchr(line, '\r');
+        if (newline != NULL) {
+            *newline = '\0';
+        }
+    }
+
+    return 1;
+}
+
+/* Writes the whole reply. Returns 0 on success. */
+static int write_reply(wn_ipc_server *s, const char *text)
+{
+    DWORD count = 0;
+    DWORD wait;
+
+    (void)ResetEvent(s->event);
+    if (WriteFile(s->pipe, text, (DWORD)strlen(text), &count, &s->ov)) {
+        return 0;
+    }
+    if (GetLastError() != ERROR_IO_PENDING) {
+        return -1;
+    }
+
+    wait = WaitForSingleObject(s->event, 2000);
+    if (wait != WAIT_OBJECT_0) {
+        return -1;
+    }
+    if (!GetOverlappedResult(s->pipe, &s->ov, &count, FALSE)) {
+        return -1;
+    }
+    return 0;
 }
 
 int wn_ipc_server_reply(wn_ipc_server *s, const char *text)
 {
-    (void)s;
-    (void)text;
-    return -1;
+    int result;
+
+    if (s == NULL || !s->connected || text == NULL) {
+        return -1;
+    }
+
+    result = write_reply(s, text);
+    if (result == 0) {
+        /* DisconnectNamedPipe discards unread bytes, so wait until the client
+         * has consumed the reply. */
+        (void)FlushFileBuffers(s->pipe);
+    }
+    wn_ipc_server_drop(s);
+    return result;
+}
+
+int wn_ipc_server_reply_and_release(wn_ipc_server *s, const char *text)
+{
+    int result;
+
+    if (s == NULL || !s->connected || text == NULL) {
+        return -1;
+    }
+
+    result = write_reply(s, text);
+    if (result == 0) {
+        (void)FlushFileBuffers(s->pipe);
+    }
+
+    /* The instance is the connection on Windows, so destroy it instead of
+     * disconnecting: no new client can attach to a daemon that is leaving. */
+    s->connected = 0;
+    s->pending = 0;
+    if (s->pipe != INVALID_HANDLE_VALUE) {
+        (void)CloseHandle(s->pipe);
+        s->pipe = INVALID_HANDLE_VALUE;
+    }
+    return result;
 }
 
 void wn_ipc_server_drop(wn_ipc_server *s)
 {
-    (void)s;
+    if (s != NULL && s->connected) {
+        (void)DisconnectNamedPipe(s->pipe);
+        s->connected = 0;
+        s->pending = 0;
+    }
 }
 
 void wn_ipc_server_release(wn_ipc_server *s)
 {
-    (void)s;
-}
-
-void wn_ipc_server_abandon(wn_ipc_server *s)
-{
-    free(s);
+    if (s == NULL) {
+        return;
+    }
+    wn_ipc_server_drop(s);
+    if (s->pipe != INVALID_HANDLE_VALUE) {
+        (void)CloseHandle(s->pipe);
+        s->pipe = INVALID_HANDLE_VALUE;
+    }
 }
 
 void wn_ipc_server_close(wn_ipc_server *s)
 {
+    if (s == NULL) {
+        return;
+    }
+    wn_ipc_server_release(s);
+    if (s->event != INVALID_HANDLE_VALUE) {
+        (void)CloseHandle(s->event);
+        s->event = INVALID_HANDLE_VALUE;
+    }
     free(s);
 }
 
-int wn_platform_ipc_supported(void)
+void wn_ipc_server_abandon(wn_ipc_server *s)
 {
-    return 0;
+    /* There is no fork on Windows: the handle never has a second owner. */
+    wn_ipc_server_close(s);
 }
 
 #else /* POSIX */
@@ -109,11 +463,6 @@ struct wn_ipc_server {
     int lock_fd;
     char path[WN_PATH_MAX];
 };
-
-int wn_platform_ipc_supported(void)
-{
-    return 1;
-}
 
 static int write_all(int fd, const char *text, size_t length)
 {
@@ -425,6 +774,19 @@ void wn_ipc_server_drop(wn_ipc_server *s)
         (void)close(s->client_fd);
         s->client_fd = -1;
     }
+}
+
+int wn_ipc_server_reply_and_release(wn_ipc_server *s, const char *text)
+{
+    if (s == NULL) {
+        return -1;
+    }
+
+    /* Give up the address first: the client takes the reply as permission to
+     * start the next daemon. The accepted connection stays open, so the reply
+     * still goes out. */
+    wn_ipc_server_release(s);
+    return wn_ipc_server_reply(s, text);
 }
 
 void wn_ipc_server_release(wn_ipc_server *s)

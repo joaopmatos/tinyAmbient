@@ -10,8 +10,8 @@
  * holds an exclusive lock on a sibling lock file for its whole lifetime, so a
  * second start cannot race the first one into binding the same address.
  *
- * Windows named pipes land with M8 parity; this module compiles there and
- * reports IPC as unsupported. */
+ * Windows uses a byte-mode named pipe with a per-user DACL; the pipe instance is
+ * also the single-instance guard. */
 
 /* Client results. The caller distinguishes "no daemon" (start one) from a
  * real failure (exit 3). */
@@ -41,6 +41,13 @@ int wn_ipc_server_wait(wn_ipc_server *s, char *line, size_t cap,
 
 /* Sends the whole reply and closes the client. Returns 0 on success. */
 int wn_ipc_server_reply(wn_ipc_server *s, const char *text);
+
+/* Sends the final reply and gives up the address in one step. The order differs
+ * by platform: POSIX releases the socket before the reply, because the accepted
+ * connection is independent of the listening socket; Windows writes and flushes
+ * first, because the pipe instance is the connection. Either way the client
+ * takes the reply as permission to start the next daemon. */
+int wn_ipc_server_reply_and_release(wn_ipc_server *s, const char *text);
 
 /* Closes the current client without replying. */
 void wn_ipc_server_drop(wn_ipc_server *s);

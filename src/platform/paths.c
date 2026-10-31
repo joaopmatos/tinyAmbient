@@ -15,6 +15,7 @@
 #if defined(_WIN32)
 #include <direct.h>
 #include <errno.h>
+#include <sddl.h>
 #include <windows.h>
 #else
 #include <errno.h>
@@ -235,15 +236,81 @@ int wn_paths_make_config_dir(const char *file, int portable, char *err,
     return make_directories(parent, err, err_cap);
 }
 
+#if defined(_WIN32)
+void *wn_paths_user_sid(void)
+{
+    HANDLE token = NULL;
+    DWORD needed = 0;
+    TOKEN_USER *user;
+    void *sid = NULL;
+    DWORD length;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return NULL;
+    }
+
+    /* The first call sizes the buffer; a TOKEN_USER is variable-length because
+     * the SID is embedded. */
+    (void)GetTokenInformation(token, TokenUser, NULL, 0, &needed);
+    if (needed == 0) {
+        (void)CloseHandle(token);
+        return NULL;
+    }
+
+    user = malloc(needed);
+    if (user == NULL) {
+        (void)CloseHandle(token);
+        return NULL;
+    }
+    if (!GetTokenInformation(token, TokenUser, user, needed, &needed)) {
+        free(user);
+        (void)CloseHandle(token);
+        return NULL;
+    }
+
+    length = GetLengthSid(user->User.Sid);
+    sid = malloc(length);
+    if (sid != NULL && !CopySid(length, sid, user->User.Sid)) {
+        free(sid);
+        sid = NULL;
+    }
+
+    free(user);
+    (void)CloseHandle(token);
+    return sid;
+}
+#endif
+
 int wn_paths_ipc_address(char *out, size_t cap)
 {
 #if defined(_WIN32)
-    /* Named pipes with a per-user ACL are part of the M8 parity pass. Returning
-     * failure here keeps the Windows build honest: the CLI reports that the
-     * daemon is unavailable instead of pretending IPC works. */
-    (void)out;
-    (void)cap;
-    return -1;
+    const char *override;
+    void *sid;
+    LPSTR text = NULL;
+    int result;
+
+    /* Windows has no per-test runtime directory, so the test suite points this
+     * at a private pipe instead of the user's real one. */
+    override = getenv("TINYAMBIENT_IPC");
+    if (override != NULL && override[0] != '\0') {
+        return format_path(out, cap, "%s", override);
+    }
+
+    /* The SID, not the user name: names are not unique across domains and may
+     * contain characters a pipe path cannot carry. */
+    sid = wn_paths_user_sid();
+    if (sid == NULL) {
+        return -1;
+    }
+    if (!ConvertSidToStringSidA((PSID)sid, &text)) {
+        free(sid);
+        return -1;
+    }
+
+    result = format_path(out, cap, "\\\\.\\pipe\\tinyambient-%s", text);
+    LocalFree(text);
+    free(sid);
+    return result;
 #else
     const char *runtime = getenv("XDG_RUNTIME_DIR");
 

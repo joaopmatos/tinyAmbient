@@ -107,29 +107,32 @@ static void log_event(const wn_session *s, const char *text)
     }
 }
 
-/* Tells the process that forked us whether the daemon came up: 0 is ready, 1 is
- * a failed device start. If the child dies first, the parent sees EOF instead
- * and reports the same failure. */
+/* Tells the process that started us whether the daemon came up. POSIX uses a
+ * pipe: 0 is ready, 1 is a failed device start, and EOF means the child died
+ * first. Windows uses an inherited manual-reset event, where signaled means
+ * ready and the parent watches the process handle for failure. */
 static void notify_ready(wn_session *s, int ok)
 {
-    if (s->ready_fd < 0) {
+    if (s->ready_fd == -1) {
         return;
     }
 #if defined(_WIN32)
-    char byte = ok ? 0 : 1;
-
-    (void)_write(s->ready_fd, &byte, 1);
-    (void)_close(s->ready_fd);
+    if (ok) {
+        (void)SetEvent((HANDLE)s->ready_fd);
+    }
+    (void)CloseHandle((HANDLE)s->ready_fd);
 #else
-    char byte = ok ? 0 : 1;
-    ssize_t written;
+    {
+        char byte = ok ? 0 : 1;
+        ssize_t written;
 
-    /* A failed write needs no recovery: the parent sees EOF and reports the
-     * same failure. The result is stored only because GCC's
-     * warn_unused_result rejects a bare `(void)` cast. */
-    written = write(s->ready_fd, &byte, 1);
-    (void)written;
-    (void)close(s->ready_fd);
+        /* A failed write needs no recovery: the parent sees EOF and reports the
+         * same failure. The result is stored only because GCC's
+         * warn_unused_result rejects a bare `(void)` cast. */
+        written = write((int)s->ready_fd, &byte, 1);
+        (void)written;
+        (void)close((int)s->ready_fd);
+    }
 #endif
     s->ready_fd = -1;
 }
@@ -375,17 +378,14 @@ int wn_platform_run(wn_engine *e, wn_session *s)
                 int want_quit = handle_line(e, s, &deadline, line, now_ms(),
                                             reply, sizeof(reply));
 
-                /* Remove the socket and release the lock before the final reply,
-                 * so the client can start the next daemon as soon as it sees
-                 * the reply. */
+                /* The quit reply doubles as permission to start the next
+                 * daemon, so the address is given up in the same step. */
                 if (want_quit) {
-                    wn_ipc_server_release(s->ipc);
-                }
-                (void)wn_ipc_server_reply(s->ipc, reply);
-                if (want_quit) {
+                    (void)wn_ipc_server_reply_and_release(s->ipc, reply);
                     log_event(s, "quit requested over IPC");
                     break;
                 }
+                (void)wn_ipc_server_reply(s->ipc, reply);
             }
         } else {
             sleep_ms(TICK_MS);
@@ -410,16 +410,102 @@ int wn_platform_ipc_send(const char *line, char *reply, size_t cap)
     return wn_ipc_client_send(line, reply, cap);
 }
 
-int wn_platform_detach(int *ready_fd, char *err, size_t err_cap)
+int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
+                       char *err, size_t err_cap)
 {
 #if defined(_WIN32)
-    (void)ready_fd;
-    (void)snprintf(err, err_cap,
-                   "the background daemon requires Windows parity (M8)");
-    return WN_DETACH_ERROR;
+    SECURITY_ATTRIBUTES inheritable;
+    STARTUPINFOA startup;
+    PROCESS_INFORMATION child;
+    HANDLE ready;
+    HANDLE wait_for[2];
+    char exe[WN_PATH_MAX];
+    char command[4096];
+    size_t used;
+    DWORD waited;
+    int i;
+
+    if (ready_fd == NULL) {
+        (void)snprintf(err, err_cap, "internal: no readiness handle");
+        return WN_DETACH_ERROR;
+    }
+    *ready_fd = -1;
+
+    if (GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe)) == 0) {
+        (void)snprintf(err, err_cap, "cannot resolve the executable path");
+        return WN_DETACH_ERROR;
+    }
+
+    /* Inheritable so the child can signal it by value. There is no fork on
+     * Windows, so the daemon is a fresh process that re-runs the same
+     * arguments behind an internal switch. */
+    inheritable.nLength = sizeof(inheritable);
+    inheritable.lpSecurityDescriptor = NULL;
+    inheritable.bInheritHandle = TRUE;
+    ready = CreateEventA(&inheritable, TRUE, FALSE, NULL);
+    if (ready == NULL) {
+        (void)snprintf(err, err_cap, "cannot create the startup event");
+        return WN_DETACH_ERROR;
+    }
+
+    used =
+        (size_t)snprintf(command, sizeof(command), "\"%s\" --daemon-child %llu",
+                         exe, (unsigned long long)(uintptr_t)ready);
+    if (used >= sizeof(command)) {
+        (void)CloseHandle(ready);
+        (void)snprintf(err, err_cap, "the daemon command line is too long");
+        return WN_DETACH_ERROR;
+    }
+    /* Session arguments are flags, noise names, and integers, so they need no
+     * quoting: --render never reaches this path (PRD section 7 rule 3). */
+    for (i = 1; i < argc; i++) {
+        int written =
+            snprintf(command + used, sizeof(command) - used, " %s", argv[i]);
+
+        if (written < 0 || (size_t)written >= sizeof(command) - used) {
+            (void)CloseHandle(ready);
+            (void)snprintf(err, err_cap, "the daemon command line is too long");
+            return WN_DETACH_ERROR;
+        }
+        used += (size_t)written;
+    }
+
+    memset(&startup, 0, sizeof(startup));
+    startup.cb = sizeof(startup);
+    memset(&child, 0, sizeof(child));
+
+    /* DETACHED_PROCESS gives the daemon no console, so a background start does
+     * not flash a window. */
+    if (!CreateProcessA(exe, command, NULL, NULL, TRUE, DETACHED_PROCESS, NULL,
+                        NULL, &startup, &child)) {
+        (void)CloseHandle(ready);
+        (void)snprintf(err, err_cap, "cannot start the daemon");
+        return WN_DETACH_ERROR;
+    }
+    (void)CloseHandle(child.hThread);
+
+    wait_for[0] = ready;
+    wait_for[1] = child.hProcess;
+    waited = WaitForMultipleObjects(2, wait_for, FALSE, 5000);
+
+    if (waited == WAIT_OBJECT_0) {
+        (void)CloseHandle(ready);
+        (void)CloseHandle(child.hProcess);
+        return WN_DETACH_PARENT;
+    }
+
+    /* Either the child died before the device came up, or it wedged. */
+    (void)TerminateProcess(child.hProcess, 1);
+    (void)CloseHandle(ready);
+    (void)CloseHandle(child.hProcess);
+    (void)snprintf(err, err_cap, "the daemon did not start");
+    return WN_DETACH_PARENT_FAIL;
 #else
     int pipe_fds[2];
     pid_t pid;
+
+    (void)argc;
+    (void)argv;
 
     if (ready_fd == NULL) {
         (void)snprintf(err, err_cap, "internal: no readiness pipe");

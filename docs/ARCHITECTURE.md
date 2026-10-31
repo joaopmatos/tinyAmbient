@@ -300,8 +300,11 @@ Resolves the config directory. The only place that touches `getenv`, `HOME`, or 
   fails with a clear message when that directory is not writable.
 - `wn_paths_ipc_address` resolves `$XDG_RUNTIME_DIR/tinyambient.sock`, falling
   back to `/tmp/tinyambient-<uid>.sock`. The fallback carries the uid because
-  `/tmp` is shared; the socket itself is still mode `0600`. Windows returns
-  failure until the M8 named-pipe pass.
+  `/tmp` is shared; the socket itself is still mode `0600`.
+- On Windows it resolves `\\.\pipe\tinyambient-<sid>` from the user SID;
+  `wn_paths_user_sid` returns the same SID for the pipe's DACL. `TINYAMBIENT_IPC`
+  replaces the whole name, because Windows has no per-test runtime directory and
+  the tests must not reach a real session.
 
 ---
 
@@ -375,6 +378,14 @@ dispatch, and quit.
   pipe for five seconds and exits 0 only after the child reports that the device
   is up; otherwise it kills the child and exits 1. A single fork is enough
   because the daemon never reopens a terminal.
+- On Windows there is no fork. The parent creates an inheritable manual-reset
+  event, starts a detached copy of itself (`DETACHED_PROCESS`) with
+  `--daemon-child <handle>` in front of the original arguments, and waits on the
+  event and the child's process handle for five seconds. The child signals the
+  event once the device is up; if it exits first, the parent reports the same
+  failure a POSIX parent sees on EOF. The child re-runs the arguments rather
+  than inheriting memory, which is safe because every step of session setup is
+  deterministic from the arguments and the saved configuration.
 
 ---
 
@@ -383,13 +394,13 @@ dispatch, and quit.
 | OS | Address | Permissions |
 |---|---|---|
 | Linux | `$XDG_RUNTIME_DIR/tinyambient.sock` (fallback `/tmp/tinyambient-<uid>.sock`) | `0600` |
-| Windows | `\\.\pipe\tinyambient-<sid>` | Current-user ACL (M8) |
+| Windows | `\\.\pipe\tinyambient-<sid>` | DACL grants the current user only |
 
 Startup sequence for any invocation:
 
-1. try to connect to the socket;
+1. try to connect to the address;
 2. if it answers, send the command, read the reply, print it, exit;
-3. if it is absent, take the lock and become the daemon.
+3. if it is absent, become the daemon.
 
 Single instance:
 
@@ -423,8 +434,24 @@ Protocol:
   fresh start overlap: the second invocation must see either the old daemon or a
   clean "not there", never a spurious failure.
 
-Windows: `platform/ipc.c` compiles as a stub and `wn_platform_ipc_supported()`
-returns 0. The named pipe and its ACL land with M8 parity.
+Windows: the same contract over a byte-mode named pipe. Differences that matter:
+
+- `CreateNamedPipe` with `nMaxInstances = 1` is the single-instance guard; a
+  second daemon fails with `ERROR_ACCESS_DENIED`, which maps to the same
+  "another daemon is already running" message. There is no lock file and no
+  stale path to clean up: the pipe disappears when its last handle closes.
+- The pipe is created with `FILE_FLAG_OVERLAPPED`, so the daemon can wait for a
+  client for one tick without blocking the timer or the device supervision.
+  `ConnectNamedPipe` stays pending across ticks; `ERROR_PIPE_CONNECTED` covers
+  the client that arrived between creation and the call.
+- The DACL grants `GENERIC_ALL` to the current user SID and nothing else, which
+  is the named-pipe equivalent of the socket's `0600`.
+- The instance is the connection, so a reply must be written and flushed before
+  the instance is disconnected; `wn_ipc_server_reply_and_release` keeps that
+  ordering per platform. The client reads until the newline and treats a broken
+  pipe with no bytes as "the daemon was leaving" and retries.
+- The client maps `ERROR_PIPE_BUSY` (a live daemon between clients) to
+  `WaitNamedPipe` plus a retry, and `ERROR_FILE_NOT_FOUND` to `WN_IPC_ABSENT`.
 
 ---
 
@@ -461,15 +488,17 @@ precedence rules live in PRD section 7; do not duplicate them here.
   applied and saved once, the engine is created, the playback commands are
   applied, and the timer is armed. The parent waits for the readiness byte, so a
   first start with no audio device still exits 1 with a message.
+- Windows cannot fork, so the same preparation runs twice: once in the parent
+  (which then exits) and once in the detached child, which re-parses the
+  original arguments behind `--daemon-child`. The repetition is safe because
+  the steps are deterministic; `toggle` is the only one that depends on prior
+  state, and both copies start from the saved configuration.
 - Setting commands (`noise`, `volume`, `mono`, `stereo`) persist. When the daemon
   applies them, it writes the file itself; playback and timer commands never
   write. `--portable` changes the path, nothing else. With a daemon already
   running, `--portable --status` reports that daemon's state: the flag selects a
   file, and a live daemon has already chosen its own.
 - `--render` neither reads nor writes configuration and never contacts a daemon.
-- On platforms without IPC (`wn_platform_ipc_supported()` is 0, currently
-  Windows until M8), session commands report that the daemon is unavailable and
-  setting commands persist in-process, which is the M6 behavior.
 - Errors go to `stderr` prefixed with `tinyambient: `.
 - Exit codes: 0 success, 1 runtime failure, 2 usage error, 3 IPC failure.
 

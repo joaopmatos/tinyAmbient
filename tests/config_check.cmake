@@ -2,10 +2,10 @@
 #   cmake -DBINARY=<exe> -DWORKDIR=<dir> -DVERSION=<v> -P tests/config_check.cmake
 #
 # Every run gets a sandboxed XDG_CONFIG_HOME (Linux) and APPDATA (Windows), so
-# the test never touches the developer's real configuration. On POSIX a
-# sandboxed XDG_RUNTIME_DIR keeps the daemon that content commands start from
-# colliding with a real session; each such daemon is quit before the next
-# section touches the file.
+# the test never touches the developer's real configuration. A sandboxed
+# XDG_RUNTIME_DIR (Linux) or a private pipe name (Windows) keeps the daemon that
+# content commands start from colliding with a real session; each such daemon is
+# quit before the next section touches the file.
 
 if(NOT DEFINED BINARY OR NOT DEFINED WORKDIR OR NOT DEFINED VERSION)
     message(FATAL_ERROR "config_check: BINARY, WORKDIR and VERSION are required")
@@ -22,12 +22,18 @@ file(MAKE_DIRECTORY "${RUNTIME}")
 
 if(WIN32)
     set(CFG "${APPDATA}/tinyAmbient/config.ini")
-    # Until the M8 parity pass a Windows content command persists in-process
-    # and starts no daemon, so status still reports playing=0.
-    set(PLAYING 0)
 else()
     set(CFG "${XDG}/tinyambient/config.ini")
-    set(PLAYING 1)
+endif()
+set(PLAYING 1)
+
+# Windows has no per-test runtime directory, so the IPC pipe is named explicitly
+# and the run cannot reach the developer's real daemon.
+string(MD5 IPC_TAG "${WORKDIR}")
+if(WIN32)
+    set(IPC_NAME "\\\\.\\pipe\\tinyambient-config-${IPC_TAG}")
+else()
+    set(IPC_NAME "")
 endif()
 
 function(run_exe exe)
@@ -37,6 +43,7 @@ function(run_exe exe)
             "XDG_RUNTIME_DIR=${RUNTIME}"
             "APPDATA=${APPDATA}"
             "TINYAMBIENT_AUDIO=null"
+            "TINYAMBIENT_IPC=${IPC_NAME}"
             "${exe}" ${ARGN}
         RESULT_VARIABLE result
         OUTPUT_VARIABLE output
@@ -81,11 +88,8 @@ endfunction()
 
 # Stops the daemon a content command may have started. On POSIX the daemon is
 # what persists the setting, so it has to be quit before the test edits the
-# file behind its back. On Windows this is a no-op (exit 1, ignored).
+# file behind its back.
 function(quit_daemon)
-    if(WIN32)
-        return()
-    endif()
     run_exe("${BINARY}" --quit)
     if(NOT TA_CODE EQUAL 0)
         message(FATAL_ERROR

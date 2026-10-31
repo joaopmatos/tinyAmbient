@@ -2,6 +2,7 @@
 #define WN_PLATFORM_PLATFORM_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "core/config.h"
 #include "core/engine.h"
@@ -36,9 +37,10 @@ typedef struct {
      * product's 20 s without a second code path. 0 selects WN_STOP_FADE_MS. */
     long stop_fade_ms;
 
-    /* Write one byte here once the audio device is up (or on failure), then
-     * close it. -1 when the caller needs no readiness report. */
-    int ready_fd;
+    /* Reports readiness once the audio device is up (or on failure). POSIX
+     * carries a pipe descriptor, Windows an inherited event handle; -1 when the
+     * caller needs no readiness report. */
+    intptr_t ready_fd;
 
     /* Log lifecycle events to stderr. --foreground sets it (PRD FR-12); a
      * background daemon has stderr on /dev/null anyway. */
@@ -63,18 +65,16 @@ void wn_platform_request_quit(void);
  * WN_IPC_OK, WN_IPC_ABSENT (no daemon), or WN_IPC_ERROR. */
 int wn_platform_ipc_send(const char *line, char *reply, size_t cap);
 
-/* True when this platform implements the daemon and IPC. Windows returns 0
- * until the M8 parity pass; the CLI then keeps settings commands in-process. */
-int wn_platform_ipc_supported(void);
-
 /* Detaches the current process into a background daemon.
  *
- * In the parent, waits for the daemon's readiness report and returns
+ * POSIX forks: the parent waits for the daemon's readiness report and returns
  * WN_DETACH_PARENT (exit 0), WN_DETACH_PARENT_FAIL (exit 1), or
- * WN_DETACH_ERROR. In the child, returns WN_DETACH_CHILD with `ready_fd` set
- * to the pipe it must report on. The child also detaches from the terminal and
- * redirects stdin/stdout/stderr to /dev/null; the parent must not close the
- * IPC server it opened before the fork, because the child still uses it. */
-int wn_platform_detach(int *ready_fd, char *err, size_t err_cap);
+ * WN_DETACH_ERROR; the child returns WN_DETACH_CHILD with `ready_fd` set to the
+ * pipe it must report on. Windows has no fork, so this only ever runs in the
+ * parent: it starts a detached copy of itself with the same arguments and
+ * returns WN_DETACH_PARENT or WN_DETACH_PARENT_FAIL. `argv` is what the copy
+ * re-runs, and is ignored on POSIX. */
+int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
+                       char *err, size_t err_cap);
 
 #endif /* WN_PLATFORM_PLATFORM_H */
