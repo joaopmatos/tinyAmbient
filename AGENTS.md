@@ -195,7 +195,7 @@ Runtime linking of ALSA/Pulse is the default; `ldd` must not list `libasound` or
 | CLI + miniaudio, no backends | 65 KB |
 | CLI + miniaudio + ALSA + Pulse | **98 KB** |
 | ALSA only / Pulse only | 77 / 81 KB |
-| Windows + `/MT` | ~200-250 KB (estimated) |
+| Windows + `/MT` | 292 KB measured (299,520 bytes), WASAPI only |
 
 A regression above ~20 KB means something large slipped in.
 
@@ -215,7 +215,7 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | M6 | M5 + parameter atomics, fades, crossfades, stop-after timer, device restart backoff, `--foreground` | 108 KB | 150 KB |
 | M7 | M6 + Unix socket, single instance, detached daemon, forwarding, daemon-side persistence | 116 KB | 150 KB |
 | M8 | M7 + Windows named pipe, per-user ACL, detached daemon, Windows IPC test | 116 KB Linux | 150 KB |
-| M8 | Windows 10/11, MSVC 19, `/MT /O1 /GL` | see the M8 note | 300 KB |
+| M8 | Windows 10/11, MSVC 19, `/MT /O1 /GL`, WASAPI only | 292 KB (299,520 bytes) | 300 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
@@ -225,7 +225,7 @@ M6 note: the file grew from 23,608 to 110,120 bytes (+84.5 KB). This is the mile
 
 M7 note: the file grew from 110,120 to 118,472 bytes (+8,352). `.text` is 108,037 bytes, `.data` 1,380, `.bss` 4,896. The cost is the socket server and client, the flock-based single-instance guard, the detach path with its readiness pipe, and the daemon-side command dispatch and persistence. `fork`, `poll`, and the socket calls are libc, so nothing new is linked; `ldd` still lists neither `libasound` nor `libpulse`.
 
-M8 note: the Linux file did not move (118,472 bytes); `.text` grew by 180 bytes to 108,217 because the Windows branch is preprocessed out and only the `reply_and_release` path is new. The Windows figure comes from the CI job, which prints it before the size gate; the budget is 300 KB and the estimate was 200-250 KB. `advapi32` is the only new import, for the token and SID calls behind the pipe name and DACL.
+M8 note: the Linux file did not move (118,472 bytes); `.text` grew by 180 bytes to 108,217 because the Windows branch is preprocessed out and only the `reply_and_release` path is new. The first Windows build measured **318,976 bytes (311 KB)**, 12 KB over budget: the named pipe, the SID/DACL code, the detach path, and `advapi32` were enough to cross a line the M7 binary was already close to. Compiling out DirectSound and WinMM (`MA_NO_DSOUND`, `MA_NO_WINMM`) brought it to **299,520 bytes (292 KB)**, 8 KB under. Windows 10/11 needs WASAPI; the two legacy backends cost more than the whole IPC layer. The Windows job prints the size before the gate so the number is in the log.
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
@@ -275,6 +275,7 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 - **Forwarded errors:** the daemon replies `error <exit-code> <message>`; the client prints the message and exits with that code, so a failed daemon-side config write stays exit 1 and an invalid command stays exit 2.
 - **Windows IPC:** the pipe instance is the connection, so the quit reply must be written and flushed before the instance is destroyed. `wn_ipc_server_reply_and_release` owns that ordering per platform; do not call `wn_ipc_server_release` before the reply on Windows, or the client sees a broken pipe instead of `ok`.
 - **Windows daemon start:** the child re-runs the parent's arguments. Everything it does must be deterministic from those arguments plus the saved configuration, or the two paths diverge. `--render` never reaches this path, so the arguments are flags, noise names, and integers that need no command-line quoting.
+- **Windows handle inheritance:** `CreateProcess` with `bInheritHandles` hands over every inheritable handle, including the caller's stdout. A daemon that keeps that pipe open makes `execute_process`, a shell pipeline, or any reader waiting for EOF block until the daemon exits. Pass `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` with only the readiness event.
 
 ---
 
