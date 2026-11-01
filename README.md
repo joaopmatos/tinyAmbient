@@ -2,38 +2,45 @@
 
 **Background noise for your workday, without the browser tab.**
 
-tinyAmbient plays white, pink, or brown noise while you work. It starts
-quickly, keeps playing in the background, and stays out of the way. No
-account, no ads, no network connection.
+White, pink, or brown noise from one small binary. No account, no ads, no
+network connection. Linux (x86_64) and Windows 10/11 (x86_64).
 
-It runs on Linux (x86_64) and Windows 10/11 (x86_64).
+## Try it
 
-## My motivation
-Let's imagine you want to listen to some background noise while working. What are your main options?
-- Youtube video
-- Spotify
-- Blanket
-- Other apps?
+```sh
+tinyambient --noise pink    # start playing; the command returns at once
+tinyambient --status        # see what is running
+tinyambient --volume 40     # change it from any terminal
+tinyambient --quit          # stop
+```
 
-None of these satisfied my desire for a *lean*, *resource efficient*, zero dependencies application. The implementation that's been done runs on *extremely* low resources: under 10 MB of RAM, under 1% of one CPU core, and a <150 KB Linux / <300 KB Windows binary.
-
-This application only needs a local installation and you're off to the races! It efficiently gets out of the way.
+The first command starts a small background process. Everything after it talks
+to that process, so the session survives between terminals and shells.
 
 ## What you get
 
-- White, pink, and brown noise.
-- One command to start; control it from any terminal.
-- Keeps playing between commands.
+- White, pink, and brown noise, generated in-process.
+- One command to start; control it from any terminal afterwards.
 - Remembers your noise type, volume, and mono/stereo setting.
 - Stops on its own after a time you choose.
-- No account, no telemetry, no network access.
+- Roughly 116 KB on Linux and 292 KB on Windows. No installer, no runtime, no
+  dependencies beyond the audio stack your desktop already ships.
+
+## Why this exists
+
+If you want background noise while working, the usual options are a 10-hour
+YouTube loop, a streaming playlist or a desktop app.
+Each one costs something: a browser tab holding memory, an account, a
+subscription, or a piece of hardware.
+
+tinyAmbient is the lean version of that. It runs on under 10 MB of RAM and
+under 1% of one CPU core, keeps a stable output level, and gets out of the way.
 
 ## Install
 
-tinyAmbient is a single binary. Download the archive for your platform from
-the [latest release](https://github.com/joaopmatos/tinyAmbient/releases/latest),
-unpack it, and put the binary on your `PATH`. There is no installer and no
-runtime to add.
+Download the archive for your platform from the
+[latest release](https://github.com/joaopmatos/tinyAmbient/releases/latest),
+unpack it, and put the binary on your `PATH`.
 
 ### Linux
 
@@ -57,12 +64,6 @@ runtime to add.
 
    ```sh
    tinyambient --version
-   ```
-
-5. Start it:
-
-   ```sh
-   tinyambient --noise pink
    ```
 
 If `~/.local/bin` is not on your `PATH`, add it in your shell profile or use
@@ -91,14 +92,24 @@ install.
    tinyambient --version
    ```
 
-5. Start it:
+No separate runtime is required. You can also skip the `PATH` step and run the
+executable with its full path.
 
-   ```powershell
-   tinyambient --noise pink
-   ```
+### Run without installing
 
-No separate runtime is required. You can also skip the `PATH` step and run
-the executable with its full path.
+You can run the binary straight from the folder you extracted:
+
+```sh
+./tinyambient --noise pink
+```
+
+On Windows:
+
+```powershell
+.\tinyambient.exe --noise pink
+```
+
+Settings still go to the usual per-user location unless you pass `--portable`.
 
 ### Verify the download (optional)
 
@@ -117,38 +128,6 @@ Get-FileHash .\tinyambient-<version>-windows-x86_64.zip -Algorithm SHA256
 
 The printed hash must match the line for that file in `SHA256SUMS`.
 
-### Run without installing
-
-You can run the binary from the folder you extracted:
-
-```sh
-./tinyambient --noise pink
-```
-
-On Windows:
-
-```powershell
-.\tinyambient.exe --noise pink
-```
-
-Settings still go to the usual per-user location unless you pass
-`--portable`.
-
-## Quick start
-
-```sh
-tinyambient --noise brown --volume 25   # start with brown noise at 25%
-tinyambient --status                    # see what is playing
-tinyambient --volume 40                 # change the volume
-tinyambient --stop-after 90             # stop after 90 minutes
-tinyambient --toggle                    # pause or resume
-tinyambient --quit                      # stop now
-```
-
-The first command starts a small background process. Later commands talk to
-it and return immediately, so you can keep the same session running from any
-terminal.
-
 ## Commands
 
 | Command | Effect |
@@ -162,8 +141,9 @@ terminal.
 | `--portable` | Keep `config.ini` next to the executable. |
 | `--foreground` | Keep the process attached to the terminal. |
 
-You can write commands with or without the leading `--`: `tinyambient noise
-brown` and `tinyambient --noise brown` do the same thing.
+Commands work with or without the leading `--`: `tinyambient noise brown` and
+`tinyambient --noise brown` do the same thing. `tinyambient --help` prints the
+full list.
 
 ## Status
 
@@ -178,9 +158,9 @@ mono=0
 stop_after=off
 ```
 
-`playing=1` means audio is running, `mono=0` means stereo, and
-`stop_after=off` means no timer is set. While a timer is active, the value is
-the number of seconds left. The format is stable, so scripts can read it.
+`playing=1` means audio is running, `mono=0` means stereo, and `stop_after=off`
+means no timer is set. While a timer is active, the value is the number of
+seconds left. The format is stable, so scripts can read it.
 
 ## Configuration
 
@@ -208,22 +188,34 @@ fade_ms=250
 | `mono` | `false` | `true` sends one channel to both ears. |
 | `fade_ms` | `250` | Crossfade length when the noise changes, 0-2000 ms. |
 
-## Advanced: render to a file
+## Coming from something else
 
-You can also write the noise to a file instead of playing it:
+| What you do today | The tinyAmbient equivalent |
+|---|---|
+| A 10-hour loop on YouTube | `tinyambient --noise brown --stop-after 600` |
+| A noise playlist on a streaming service | `tinyambient --noise pink --volume 30` |
+| A fan or a sound machine | `tinyambient --noise white` |
+
+tinyAmbient ships three synthetic generators. It has no rain, fan, or nature
+recordings, and no per-ear balance beyond stereo or mono.
+
+## Render to a file
+
+You can write the noise to a file instead of playing it:
 
 ```sh
 tinyambient --render noise.wav --noise brown --seconds 10 --seed 42
 ```
 
 A `.wav` path gets a standard WAV header. Any other path writes raw 32-bit
-float samples. `--seconds`, `--seed`, `--noise`, `--volume`, `--mono`, and
-`--stereo` apply to the render.
+float samples. The render defaults are `--noise white --volume 100 --seconds
+10 --seed 1 --stereo`; `--mono` duplicates one channel. The same seed and
+arguments always produce the same file.
 
 ## Build from source
 
-Prefer to build it yourself? You will need CMake 3.20+, a C11 compiler,
-Ninja, and Python 3 for the test suite.
+You will need CMake 3.20+, a C11 compiler, Ninja, and Python 3 for the test
+suite.
 
 Linux:
 
