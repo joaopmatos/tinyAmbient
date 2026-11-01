@@ -31,6 +31,16 @@ jobs:
       - name: Test (includes the size gate)
         run: ctest --test-dir build --output-on-failure
 
+      # Memory and CPU are part of the milestone record (AGENTS.md 6.6). The
+      # gate already ran above; this pass only puts the numbers in the log and
+      # the job summary, the same way the Windows job prints the binary size.
+      - name: Report resource usage
+        shell: bash
+        run: |
+          set -o pipefail
+          ctest --test-dir build -R '^resource$' -V \
+            | grep -- '-- resource' | tee -a "$GITHUB_STEP_SUMMARY"
+
   windows:
     name: Windows (MSVC)
     runs-on: windows-2022

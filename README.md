@@ -29,12 +29,30 @@ to that process, so the session survives between terminals and shells.
 ## Why this exists
 
 If you want background noise while working, the usual options are a 10-hour
-YouTube loop, a streaming playlist or a desktop app.
-Each one costs something: a browser tab holding memory, an account, a
-subscription, or a piece of hardware.
+YouTube loop, a streaming playlist, a paid desktop app, or a physical fan. Each
+one costs something: a browser tab holding memory, an account, a subscription,
+or a piece of hardware.
 
-tinyAmbient is the lean version of that. It runs on under 10 MB of RAM and
-under 1% of one CPU core, keeps a stable output level, and gets out of the way.
+tinyAmbient is the lean version of that. It sits at about 7 MB of memory and
+around 1% of one CPU core, holds a steady volume, and stays out of the way.
+
+## How light is it?
+
+Real numbers from the v1.0.0 build on Fedora 44 with PipeWire:
+
+| | On a desktop | On CI (no sound card) |
+|---|---|---|
+| Binary size | 116 KB | 116 KB |
+| Memory in use | 6.7 MB | 2.4 MB |
+| Memory at peak | 8.6 MB | 2.4 MB |
+| CPU while playing | 0.8-1.1% of a core | 0.8-1.1% of a core |
+| Threads | 3 | 3 |
+
+CI has no sound card, so the audio library never loads there and the memory
+figure is lower. Size, memory, and CPU are checked on every build: a change that
+makes tinyAmbient heavier fails instead of shipping.
+
+From a source checkout, `scripts/measure.sh` measures your own machine.
 
 ## Install
 
@@ -240,6 +258,7 @@ The build enforces the size budget: 150 KB on Linux and 300 KB on Windows.
 - `docs/PRD.md` - scope, behavior, acceptance criteria.
 - `docs/ARCHITECTURE.md` - internal design.
 - `AGENTS.md` - constraints, layers, build, size budget.
+- `scripts/measure.sh` - the memory and CPU numbers above, on your hardware.
 
 ## License
 

@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M8 complete; v1 is done. CMake build, layer headers, size gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, IPC on both platforms (Unix socket on Linux, per-user named pipe on Windows), single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows runs the same daemon, IPC, and test suite as Linux.
+**State:** M8 complete; v1 is done. CMake build, layer headers, size gate, resource gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, IPC on both platforms (Unix socket on Linux, per-user named pipe on Windows), single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows runs the same daemon, IPC, and test suite as Linux.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -68,6 +68,7 @@ tests/
   session_check.c        # run-loop harness: stop-after, quit (POSIX only)
   ipc_check.cmake        # daemon, forwarding, single instance (POSIX)
   ipc_check_win.cmake    # the same contract over a named pipe (Windows)
+  resource_check.cmake   # peak RSS and CPU budget (Linux, Release)
   check_spectrum.py      # slopes/RMS over raw or WAV
 third_party/
   miniaudio.h
@@ -229,6 +230,25 @@ M8 note: the Linux file did not move (118,472 bytes); `.text` grew by 180 bytes 
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
+### Resource measurements
+
+Recorded per rule 6. Enforced by the `resource` test on Linux, in Release only.
+
+| Variant | RSS steady / peak | CPU | Budget |
+|---|---|---|---|
+| Fedora 44, PipeWire, 10 s window | 6.7 MB / 8.6 MB | 0.8-1.1% of one core | not gated |
+| Null backend, what CI measures | 2.4 MB / 2.4 MB | 0.8-1.1% of one core | 4 MB peak, 2.0% |
+
+The null backend loads no audio library, so its RSS is about 4 MB below the real
+device. CI can only measure that path, so the gate lives there and the published
+figures come from `scripts/measure.sh` on a machine with a sound card.
+
+Both budgets are 1.7x to 2x the measurement. RSS could be tighter; CPU cannot,
+because the clock tick rounds a 10 s average to 0.1% and a shared runner adds
+load the code does not control. The regressions worth catching are algorithmic
+and move these numbers by an order of magnitude, not by a fifth. Raising a
+budget needs the measurement that justifies it, in the same diff (rule 10).
+
 ### Formatting
 
 `clang-format` **23.1.3**, rules in `.clang-format`, enforced in CI by `scripts/check-format.sh`.
@@ -242,7 +262,7 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 
 | Option | Default | Meaning |
 |---|---|---|
-| `TA_SANITIZE` | `OFF` | ASan + UBSan on own code. `audio/` stays uninstrumented (AGENTS 1.5). The `size` ctest entry is skipped in this configuration: the sanitizer runtime is part of the binary, so measuring it does not test the shipped artifact. |
+| `TA_SANITIZE` | `OFF` | ASan + UBSan on own code. `audio/` stays uninstrumented (AGENTS 1.5). The `size` and `resource` ctest entries are skipped in this configuration: the sanitizer runtime is part of the binary and inflates both measurements, so measuring them does not test the shipped artifact. |
 | `TA_REQUIRE_SPECTRUM` | `ON` | Fail configuration when Python3 is missing. A silently skipped FR-02 gate is worse than a missing one. |
 
 ### Per-OS notes
@@ -286,7 +306,7 @@ M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirel
 3. Do not add dependencies or widen scope (tray, network, presets, hotkeys, GUI) without asking.
 4. Prefer fixed buffers, `snprintf`, and explicit bounds checks.
 5. ASan/UBSan cover own code; miniaudio is excluded from those builds.
-6. Measure the binary every milestone and record the number.
+6. Measure the binary every milestone and record the number, together with its memory and CPU footprint (`scripts/measure.sh`).
 7. Do not commit binaries; `.gitignore` already covers them.
 8. Do not copy the reference PoC blindly: it has known weak spots (brown noise leak, gain calibration).
 9. Explain the *why* in a few lines before writing code. This is a project to learn systems programming concepts. The developer has 3 yoe as a Javascript and ABAP Developer (SAPUI5 Consultant).

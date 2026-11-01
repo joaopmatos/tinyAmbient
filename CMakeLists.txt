@@ -238,6 +238,31 @@ if(NOT TA_SANITIZE AND (CMAKE_CONFIGURATION_TYPES OR
             -P ${TA_SIZE_SCRIPT})
 endif()
 
+# --- Resource measurement ----------------------------------------------------
+#
+# Memory and CPU are gated like the binary size. The budgets sit at 1.7x to 2x
+# today's measurement: RSS is a stable number, CPU is not, so CPU gets more
+# room. Raising a budget needs the measurement that justifies it, in the same
+# diff (AGENTS.md rule 10).
+#
+# Linux only: the harness reads /proc. The Windows figure stays a manual one,
+# the same way the Windows binary size is recorded from the log.
+
+if(UNIX AND NOT APPLE AND (NOT TA_SANITIZE AND
+                           (CMAKE_CONFIGURATION_TYPES OR
+                            CMAKE_BUILD_TYPE STREQUAL "Release")))
+    set(TA_RSS_LIMIT_KB 4096)
+    set(TA_CPU_LIMIT_TENTHS 20)   # 2.0% of one core, in tenths of a percent
+    add_test(NAME resource
+        COMMAND ${CMAKE_COMMAND}
+            -DBINARY=$<TARGET_FILE:tinyambient>
+            -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DRSS_KB=${TA_RSS_LIMIT_KB}
+            -DCPU_TENTHS=${TA_CPU_LIMIT_TENTHS}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/resource_check.cmake)
+    set_tests_properties(resource PROPERTIES ENVIRONMENT "TINYAMBIENT_AUDIO=null")
+endif()
+
 # --- Unit tests --------------------------------------------------------------
 
 function(ta_add_test name source)
