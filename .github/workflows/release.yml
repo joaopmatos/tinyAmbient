@@ -1,0 +1,156 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # CMake project() has no pre-release field, so an RC tag is compared on
+      # its numeric base: v1.0.0-rc1 must ship a 1.0.0 binary. A workflow_dispatch
+      # run has no tag and skips this check.
+      - name: Tag matches CMake project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          base="${tag%%-*}"
+          version="$(sed -n 's/^    VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)"
+          if [ -z "$version" ]; then
+            echo "release: cannot read the project version from CMakeLists.txt" >&2
+            exit 1
+          fi
+          if [ "$base" != "$version" ]; then
+            echo "release: tag ${GITHUB_REF_NAME} does not match CMake ${version}" >&2
+            exit 1
+          fi
+          echo "release: ${GITHUB_REF_NAME} -> ${version}"
+
+  linux:
+    name: Linux (GCC)
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build libasound2-dev libpulse-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test (includes the size gate)
+        run: ctest --test-dir build --output-on-failure
+
+      # AGENTS.md 6.6: record the number even when the gate passes.
+      - name: Record size
+        run: |
+          bytes=$(stat -c '%s' build/tinyambient)
+          echo "Linux binary: ${bytes} bytes ($((bytes / 1024)) KB)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          version="${version//\//-}"
+          mkdir -p stage
+          cp build/tinyambient README.md LICENSE stage/
+          tar -C stage -czf "tinyambient-${version}-linux-x86_64.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: tinyambient-*.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows (MSVC)
+    needs: version
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test (includes the size gate)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Record size
+        shell: pwsh
+        run: |
+          $bytes = (Get-Item build/Release/tinyambient.exe).Length
+          "Windows binary: $bytes bytes ($([math]::Floor($bytes / 1KB)) KB)" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = ($env:GITHUB_REF_NAME -replace '^v','') -replace '/','-'
+          New-Item -ItemType Directory stage -Force | Out-Null
+          Copy-Item build/Release/tinyambient.exe, README.md, LICENSE stage/
+          Compress-Archive stage/* "tinyambient-$version-windows-x86_64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: tinyambient-*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # gh release needs repository context.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+
+      # A re-run updates the existing draft instead of failing on a duplicate
+      # tag. Drafts stay invisible until a maintainer publishes them.
+      - name: Create or update the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          prerelease=()
+          case "$GITHUB_REF_NAME" in
+            *-rc*) prerelease=(--prerelease) ;;
+          esac
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --draft --title "$GITHUB_REF_NAME" --generate-notes "${prerelease[@]}"
+          fi

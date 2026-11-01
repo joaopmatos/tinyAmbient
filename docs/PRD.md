@@ -280,7 +280,7 @@ M0–M7 constitute the Linux release. M8 closes v1.
 | D-12 | `--device` dropped from v1 | Decided |
 | D-13 | `sleep_minutes` dropped from config; timer is session state | Decided |
 | D-14 | Default stereo uses independent per-channel generators | Decided |
-| D-15 | Repository license | Open |
+| D-15 | Repository license: MIT | Decided |
 | D-16 | Windows IPC and daemon startup land at M8: named pipes with a per-user DACL, and a detached copy of the executable instead of a fork | Decided |
 
 ## 14. Open questions
@@ -288,4 +288,4 @@ M0–M7 constitute the Linux release. M8 closes v1.
 1. Exact curves and filters for gray and green noise (v2).
 2. Whether the tray returns in v2, and on which platform first.
 3. Windows console subsystem for background starts (resolved at M8).
-4. Repository license, required before public release or outside contributions.
+4. Repository license (resolved: MIT).

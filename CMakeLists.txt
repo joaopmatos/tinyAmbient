@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(tinyAmbient
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "Tiny ambient noise player"
     LANGUAGES C)
 
