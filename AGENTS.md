@@ -217,6 +217,7 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | M7 | M6 + Unix socket, single instance, detached daemon, forwarding, daemon-side persistence | 116 KB | 150 KB |
 | M8 | M7 + Windows named pipe, per-user ACL, detached daemon, Windows IPC test | 116 KB Linux | 150 KB |
 | M8 | Windows 10/11, MSVC 19, `/MT /O1 /GL`, WASAPI only | 292 KB (299,520 bytes) | 300 KB |
+| v1.0.0 | M8 source, built by CI on Ubuntu 24.04 with GCC 13 | 126 KB (129,400 bytes) | 150 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
@@ -227,6 +228,8 @@ M6 note: the file grew from 23,608 to 110,120 bytes (+84.5 KB). This is the mile
 M7 note: the file grew from 110,120 to 118,472 bytes (+8,352). `.text` is 108,037 bytes, `.data` 1,380, `.bss` 4,896. The cost is the socket server and client, the flock-based single-instance guard, the detach path with its readiness pipe, and the daemon-side command dispatch and persistence. `fork`, `poll`, and the socket calls are libc, so nothing new is linked; `ldd` still lists neither `libasound` nor `libpulse`.
 
 M8 note: the Linux file did not move (118,472 bytes); `.text` grew by 180 bytes to 108,217 because the Windows branch is preprocessed out and only the `reply_and_release` path is new. The first Windows build measured **318,976 bytes (311 KB)**, 12 KB over budget: the named pipe, the SID/DACL code, the detach path, and `advapi32` were enough to cross a line the M7 binary was already close to. Compiling out DirectSound and WinMM (`MA_NO_DSOUND`, `MA_NO_WINMM`) brought it to **299,520 bytes (292 KB)**, 8 KB under. Windows 10/11 needs WASAPI; the two legacy backends cost more than the whole IPC layer. The Windows job prints the size before the gate so the number is in the log.
+
+v1.0.0 note: the published Linux archive measures **129,400 bytes (126 KB)**. It is built by CI on Ubuntu 24.04 with GCC 13, not by the Fedora 44 toolchain the milestone rows record, and the 11 KB gap is compiler and linker version rather than code. The Windows payload is unchanged at 299,520 bytes. Both stay under the gate; the README publishes the archive size and names the local Fedora figure next to it, so a reader who downloads the binary sees the number that describes what they got.
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 

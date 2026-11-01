@@ -31,7 +31,7 @@ to that process, so the session survives between terminals and shells.
 - One command to start; control it from any terminal afterwards.
 - Remembers your noise type, volume, and mono/stereo setting.
 - Stops on its own after a time you choose.
-- Roughly 116 KB on Linux and 292 KB on Windows. No installer, no runtime, no
+- Roughly 126 KB on Linux and 292 KB on Windows. No installer, no runtime, no
   dependencies beyond the audio stack your desktop already ships.
 
 ## Why this exists
@@ -46,11 +46,12 @@ around 1% of one CPU core, holds a steady volume, and stays out of the way.
 
 ## How light is it?
 
-Real numbers from the v1.0.0 build on Fedora 44 with PipeWire:
+Real numbers from v1.0.0 on Fedora 44 with PipeWire. Binary size is from the
+published Linux archive, which is built on the CI runner:
 
 | | On a desktop | On CI (no sound card) |
 |---|---|---|
-| Binary size | 116 KB | 116 KB |
+| Binary size | 126 KB | 126 KB |
 | Memory in use | 6.7 MB | 2.4 MB |
 | Memory at peak | 8.6 MB | 2.4 MB |
 | CPU while playing | 0.8-1.1% of a core | 0.8-1.1% of a core |
@@ -59,6 +60,10 @@ Real numbers from the v1.0.0 build on Fedora 44 with PipeWire:
 CI has no sound card, so the audio library never loads there and the memory
 figure is lower. Size, memory, and CPU are checked on every build: a change that
 makes tinyAmbient heavier fails instead of shipping.
+
+The archive measures 129,400 bytes. The same source built here with Fedora's GCC
+16.2 comes out at 116 KB, so compiler and linker version decide a good part of
+the file size at this scale. Neither number is close to the 150 KB budget.
 
 From a source checkout, `scripts/measure.sh` measures your own machine.
 
