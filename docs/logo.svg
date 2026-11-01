@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="logo-title logo-desc">
+  <title id="logo-title">tinyAmbient</title>
+  <desc id="logo-desc">Three waveforms: white noise, pink noise, and brown noise.</desc>
+  <rect width="128" height="128" rx="28" fill="#14161c"/>
+  <rect x="1" y="1" width="126" height="126" rx="27" fill="none" stroke="#2a2f3a" stroke-width="2"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="4">
+    <polyline stroke="#f4f6fa" points="20,40 25.5,32 31,47 36.5,35 42,46 47.5,33 53,48 58.5,37 64,45 69.5,32 75,47 80.5,36 86,46 91.5,34 97,48 102.5,38 108,42"/>
+    <polyline stroke="#f290bb" points="20,64 28.8,58 37.6,69 46.4,60 55.2,68 64,59 72.8,69 81.6,61 90.4,67 99.2,60 108,64"/>
+    <path stroke="#c98a55" d="M20 88 Q31 77 42 88 T64 88 T86 88 T108 88"/>
+  </g>
+</svg>

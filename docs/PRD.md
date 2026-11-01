@@ -109,7 +109,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 **FR-08 Status output.** `--status` prints exactly six lines on stdout, in this order, with no spaces around `=`, each terminated by a newline:
 
 ```
-version=0.1.0
+version=1.0.0
 playing=1
 noise=pink
 volume=40
@@ -131,7 +131,7 @@ stop_after=off
 
 **FR-14 Exit codes and diagnostics.** Exit codes: `0` success, `1` runtime failure (audio device, config write, render I/O), `2` usage error, `3` IPC failure. Errors print to stderr prefixed with `tinyambient: `.
 
-**FR-15 Version and help.** `--version` prints `tinyambient 0.1.0` and exits 0. `--help` prints usage and exits 0.
+**FR-15 Version and help.** `--version` prints `tinyambient 1.0.0` and exits 0. `--help` prints usage and exits 0.
 
 **FR-16 Device failure recovery.** When the audio device stops or is removed, the daemon retries initialization with backoff (100 ms, 500 ms, 2 s, then every 5 s). Parameters and playback state are preserved. Resuming produces no click.
 

@@ -1,11 +1,15 @@
 # tinyAmbient
 
+<p align="center">
+  <img src="docs/logo.svg" width="120" alt="tinyAmbient logo">
+</p>
+
 **Background noise for your workday, without the browser tab.**
 
 White, pink, or brown noise from one small binary. No account, no ads, no
 network connection. Linux (x86_64) and Windows 10/11 (x86_64).
 
-[![tinyAmbient in a terminal](https://asciinema.org/a/IcMxXOVeztbSVEGa.svg?autoplay=1&loop=1)](https://asciinema.org/a/IcMxXOVeztbSVEGa)
+[![tinyAmbient in a terminal](https://asciinema.org/a/IcMxXOVeztbSVEGa.svg)](https://asciinema.org/a/IcMxXOVeztbSVEGa)
 
 *A 15 second tour of the CLI.*
 
