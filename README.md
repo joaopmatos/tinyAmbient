@@ -30,24 +30,109 @@ This application only needs a local installation and you're off to the races! It
 
 ## Install
 
+tinyAmbient is a single binary. Download the archive for your platform from
+the [latest release](https://github.com/joaopmatos/tinyAmbient/releases/latest),
+unpack it, and put the binary on your `PATH`. There is no installer and no
+runtime to add.
+
 ### Linux
 
-Download the tarball, extract it, and move the binary somewhere on your
-`PATH`:
+1. Download `tinyambient-<version>-linux-x86_64.tar.gz`.
+2. Unpack it:
 
-```sh
-tar -xzf tinyambient-*-linux-x86_64.tar.gz
-install -m 755 tinyambient ~/.local/bin/
-```
+   ```sh
+   tar -xzf tinyambient-*-linux-x86_64.tar.gz
+   ```
 
-tinyAmbient uses ALSA or PulseAudio/PipeWire, which are already part of most
-desktop Linux setups. There is nothing else to install.
+3. Install the binary. `~/.local/bin` works for a single user:
+
+   ```sh
+   mkdir -p ~/.local/bin
+   install -m 755 tinyambient ~/.local/bin/
+   ```
+
+   Use `sudo install -m 755 tinyambient /usr/local/bin/` for all users.
+
+4. Check that it runs:
+
+   ```sh
+   tinyambient --version
+   ```
+
+5. Start it:
+
+   ```sh
+   tinyambient --noise pink
+   ```
+
+If `~/.local/bin` is not on your `PATH`, add it in your shell profile or use
+`/usr/local/bin` instead. tinyAmbient uses ALSA or PulseAudio/PipeWire, which
+are already present on most desktop Linux systems. There is nothing else to
+install.
 
 ### Windows
 
-Download the zip and extract `tinyambient.exe`. No separate runtime is
-required. If you want to run it from any folder, add that folder to your
-`PATH` or call the executable with its full path.
+1. Download `tinyambient-<version>-windows-x86_64.zip`.
+2. Extract `tinyambient.exe` to a folder, for example `C:\Tools\tinyAmbient`.
+3. Add that folder to your user `PATH`:
+   - Settings → System → About → Advanced system settings → Environment
+     Variables → User variables → `Path` → Edit → New → `C:\Tools\tinyAmbient`.
+   - Or from PowerShell:
+
+     ```powershell
+     $dir = "C:\Tools\tinyAmbient"
+     $path = [Environment]::GetEnvironmentVariable("Path", "User")
+     [Environment]::SetEnvironmentVariable("Path", "$path;$dir", "User")
+     ```
+
+4. Open a new terminal and check that it runs:
+
+   ```powershell
+   tinyambient --version
+   ```
+
+5. Start it:
+
+   ```powershell
+   tinyambient --noise pink
+   ```
+
+No separate runtime is required. You can also skip the `PATH` step and run
+the executable with its full path.
+
+### Verify the download (optional)
+
+Each release ships a `SHA256SUMS` file next to the archives. Download it and
+the archive you need into the same folder, then compare:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+On Windows:
+
+```powershell
+Get-FileHash .\tinyambient-<version>-windows-x86_64.zip -Algorithm SHA256
+```
+
+The printed hash must match the line for that file in `SHA256SUMS`.
+
+### Run without installing
+
+You can run the binary from the folder you extracted:
+
+```sh
+./tinyambient --noise pink
+```
+
+On Windows:
+
+```powershell
+.\tinyambient.exe --noise pink
+```
+
+Settings still go to the usual per-user location unless you pass
+`--portable`.
 
 ## Quick start
 
