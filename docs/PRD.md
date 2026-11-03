@@ -41,7 +41,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 
 | ID | Scenario | Expected behavior |
 |---|---|---|
-| S1 | User starts work and runs `tinyambient` | Daemon starts, plays saved noise at saved volume, first sample audible within 200 ms |
+| S1 | User starts work and runs `tinyambient` | Daemon starts, plays saved noise at saved volume; the first sample is audible within 200 ms and the level swells over 1 s instead of arriving as a step |
 | S2 | User joins a call and runs `tinyambient toggle` | Audio pauses with a 20 ms fade |
 | S3 | User runs `tinyambient --volume 25` | Volume changes with a fade; value persists for the next session |
 | S4 | User wants the noise to stop when the work session ends and runs `tinyambient --stop-after 50` | At the 50-minute mark, playback fades out over 20 s and pauses |
@@ -109,17 +109,17 @@ Single user: a developer working on two machines, preferring keyboard and termin
 **FR-08 Status output.** `--status` prints exactly six lines on stdout, in this order, with no spaces around `=`, each terminated by a newline:
 
 ```
-version=1.0.0
+version=1.0.1
 playing=1
 noise=pink
-volume=40
+volume=20
 mono=0
 stop_after=off
 ```
 
 `stop_after` is either `off` or an integer count of remaining seconds. With no daemon running, `--status` reads configuration, reports `playing=0` and `stop_after=off`, and exits 0.
 
-**FR-09 No-argument start.** `tinyambient` with no arguments starts the daemon if absent, plays the saved noise at the saved volume, and exits 0. First sample is audible within 200 ms.
+**FR-09 No-argument start.** `tinyambient` with no arguments starts the daemon if absent, plays the saved noise at the saved volume, and exits 0. First sample is audible within 200 ms. A session start opens from silence over 1 s instead of the 20 ms used for playback changes, so a first run is not dropped into a steady level. `--render` keeps the 20 ms fade, so offline output is unchanged.
 
 **FR-10 Offline render.** `--render <file>` writes 48 kHz stereo float32 without opening an audio device and without contacting the daemon. A `.wav` extension produces a WAV container; any other extension produces raw little-endian float32 interleaved. `--seconds N` defaults to 10 and accepts 1–3600. `--seed N` defaults to 1. `--noise`, `--volume`, and `--mono`/`--stereo` select the same parameters a daemon would use; the render defaults are white, volume 100, and stereo. Byte count is `48000 * 2 * 4 * N`.
 
@@ -182,7 +182,7 @@ Location: `$XDG_CONFIG_HOME/tinyambient/config.ini` (Linux, fallback `~/.config/
 ```ini
 [general]
 noise=pink
-volume=40
+volume=20
 mono=false
 fade_ms=250
 ```
@@ -190,7 +190,7 @@ fade_ms=250
 | Key | Type | Default | Range |
 |---|---|---|---|
 | `noise` | enum | `pink` | `white`, `pink`, `brown` |
-| `volume` | integer | `40` | 0–100 |
+| `volume` | integer | `20` | 0–100 |
 | `mono` | boolean | `false` | `true`, `false` |
 | `fade_ms` | integer | `250` | 0–2000 |
 
@@ -249,7 +249,8 @@ Unknown keys and comments are ignored and preserved on rewrite. Malformed values
 | M7 | IPC, single instance | FR-07, FR-08, FR-09 pass |
 | M8 | Windows parity | All FRs pass on Windows 10/11 |
 
-M0–M7 constitute the Linux release. M8 closes v1.
+M0–M7 constitute the Linux release. M8 closes v1. v1.0.1 is a patch on M8: the
+saved default drops to volume 20 and a session start fades in over 1 s.
 
 ## 12. Risks
 
@@ -282,6 +283,7 @@ M0–M7 constitute the Linux release. M8 closes v1.
 | D-14 | Default stereo uses independent per-channel generators | Decided |
 | D-15 | Repository license: MIT | Decided |
 | D-16 | Windows IPC and daemon startup land at M8: named pipes with a per-user DACL, and a detached copy of the executable instead of a fork | Decided |
+| D-17 | A session starts at volume 20 and opens over 1 s (v1.0.1); `--render` keeps the 20 ms fade | Decided |
 
 ## 14. Open questions
 

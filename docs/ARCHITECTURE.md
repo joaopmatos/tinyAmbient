@@ -204,11 +204,15 @@ piecewise-linear progressions:
    the envelope snaps to its exact target when the fade lands, so it never
    lingers in denormal range. The engine starts at zero and fades in, which is
    the "no clicks on start" goal; `wn_engine_fade_in` re-triggers the same ramp
-   after a device restart. A stop fade is the same envelope with a long
-   duration; when it lands the audio thread stores `playing = 0`, so the daemon
-   observes the pause without inspecting the envelope. A playing/volume change
-   during the stop fade cancels it: the target changed, which means the user is
-   still working.
+   after a device restart. Session setup replaces the length of that first ramp
+   with `WN_OPENING_FADE_MS` (1 s) through `wn_engine_set_opening_fade`, so a
+   fresh daemon swells into the saved level instead of stepping into it; the
+   setter only touches the envelope before the audio thread exists. `--render`
+   never calls it, so offline output keeps the 20 ms fade and stays identical.
+   A stop fade is the same envelope with a long duration; when it lands the
+   audio thread stores `playing = 0`, so the daemon observes the pause without
+   inspecting the envelope. A playing/volume change during the stop fade cancels
+   it: the target changed, which means the user is still working.
 2. **Noise crossfade.** On a type change the audio thread copies the current
    generators to `fade_gen`, then calls `wn_noise_set_type` on the live ones
    (filters reset, RNG preserved). The copy continues the old sequence from

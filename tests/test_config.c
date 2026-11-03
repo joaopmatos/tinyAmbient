@@ -29,7 +29,7 @@ static void test_defaults(void)
 
     wn_config_defaults(&cfg);
     CHECK(cfg.noise == WN_NOISE_PINK);
-    CHECK(cfg.volume == 40);
+    CHECK(cfg.volume == 20);
     CHECK(cfg.mono == 0);
     CHECK(cfg.fade_ms == 250);
 }
@@ -82,7 +82,7 @@ static void test_malformed_values_fall_back(void)
     CHECK(warn[0] != '\0');
 
     parse(bad_volume, &cfg, warn, sizeof(warn));
-    CHECK(cfg.volume == 40);
+    CHECK(cfg.volume == 20);
     CHECK(warn[0] != '\0');
 
     parse(bad_mono, &cfg, warn, sizeof(warn));
@@ -151,7 +151,7 @@ static void test_format_defaults(void)
 {
     static const char expected[] = "[general]\n"
                                    "noise=pink\n"
-                                   "volume=40\n"
+                                   "volume=20\n"
                                    "mono=false\n"
                                    "fade_ms=250\n";
     wn_config cfg;
@@ -198,7 +198,7 @@ static void test_unknown_keys_survive_rewrite(void)
                                    "noise=brown\n";
     static const char expected[] = "[general]\n"
                                    "noise=white\n"
-                                   "volume=40\n"
+                                   "volume=20\n"
                                    "mono=false\n"
                                    "fade_ms=250\n"
                                    "future=42\n"

@@ -96,7 +96,7 @@ endfunction()
 # --- No daemon: status falls back to the configuration and starts nothing ----
 
 run_exe(--status)
-expect_status("status without a daemon" 0 pink 40 0)
+expect_status("status without a daemon" 0 pink 20 0)
 if(NOT TA_OUT MATCHES "stop_after=off\n$")
     message(FATAL_ERROR "ipc_check: no-daemon status has no stop_after=off")
 endif()
@@ -120,7 +120,7 @@ if(NOT socket_mode STREQUAL "600")
 endif()
 
 run_exe(--status)
-expect_status("status with a daemon" 1 pink 40 0)
+expect_status("status with a daemon" 1 pink 20 0)
 
 # A second bare invocation is a no-op and must not create a second daemon
 # (FR-07).

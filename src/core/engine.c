@@ -32,7 +32,9 @@ enum {
     WN_FADE_OUT_NONE = 0,
     /* A stop fade longer than this is indistinguishable from silence anyway,
      * and the cap keeps frames_for_ms() well inside 32 bits. */
-    WN_FADE_OUT_MAX_MS = 60000
+    WN_FADE_OUT_MAX_MS = 60000,
+    /* Opening ramps longer than this feel like a malfunction. */
+    WN_OPENING_FADE_MAX_MS = 5000
 };
 
 /* Everything the engine needs between calls.
@@ -176,6 +178,28 @@ void wn_engine_set_seed(wn_engine *e, uint64_t seed)
     for (ch = 0; ch < WN_CHANNELS; ch++) {
         wn_noise_init(&e->gen[ch], e->gen[ch].type, seed, (uint64_t)ch);
     }
+}
+
+void wn_engine_set_opening_fade(wn_engine *e, unsigned ms)
+{
+    unsigned frames;
+
+    if (e == NULL ||
+        atomic_load_explicit(&e->frames_rendered, memory_order_relaxed) != 0) {
+        return;
+    }
+
+    if (ms == 0) {
+        ms = WN_FADE_MS;
+    } else if (ms > WN_OPENING_FADE_MAX_MS) {
+        ms = WN_OPENING_FADE_MAX_MS;
+    }
+    frames = frames_for_ms(ms);
+
+    /* The envelope is already positioned at silence by wn_engine_create; only
+     * the length of the ramp changes. */
+    e->gain_total = frames;
+    e->gain_left = frames;
 }
 
 static void apply_command(wn_engine *e, const wn_cmd *cmd)

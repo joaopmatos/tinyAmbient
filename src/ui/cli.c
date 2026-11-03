@@ -48,6 +48,9 @@ void wn_cli_usage(void)
           "  --foreground               keep the daemon attached to the "
           "terminal\n"
           "\n"
+          "notes:\n"
+          "  a new session uses pink noise at volume 20, fading in over 1 s\n"
+          "\n"
           "render:\n"
           "  --render <file>            offline 48 kHz stereo float32; a .wav\n"
           "                             path adds a WAV header\n"
@@ -424,6 +427,11 @@ static int prepare_session(const wn_cmd *cmds, int n, int portable,
         wn_cli_error("out of memory");
         return WN_EXIT_RUNTIME;
     }
+
+    /* A session opens over a second instead of the 20 ms used for playback
+     * changes: starting a daemon is a surprise the user did not ask to hear at
+     * full level (PRD FR-09). --render keeps the short fade. */
+    wn_engine_set_opening_fade(setup->engine, WN_OPENING_FADE_MS);
 
     for (i = 0; i < n; i++) {
         switch (cmds[i].kind) {

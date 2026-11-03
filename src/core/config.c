@@ -138,7 +138,7 @@ void wn_config_defaults(wn_config *cfg)
     }
 
     cfg->noise = WN_NOISE_PINK;
-    cfg->volume = 40;
+    cfg->volume = 20;
     cfg->mono = 0;
     cfg->fade_ms = 250;
 }

@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M8 complete; v1 is done. CMake build, layer headers, size gate, resource gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, IPC on both platforms (Unix socket on Linux, per-user named pipe on Windows), single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows runs the same daemon, IPC, and test suite as Linux.
+**State:** M8 complete; v1 is done. CMake build, layer headers, size gate, resource gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, IPC on both platforms (Unix socket on Linux, per-user named pipe on Windows), single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows runs the same daemon, IPC, and test suite as Linux. v1.0.1 lowers the saved default volume to 20 and opens each session over 1 s.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -150,7 +150,7 @@ Rules:
 
 - Slope measured in third-octave bands from 40 Hz to 12 kHz.
 - No `sin`, `exp`, or `log` per sample; coefficients are computed at init.
-- Fades are linear and frame-based: 20 ms for play, pause, volume, and device resume; `fade_ms` for a type crossfade; 20 s at stop-after expiry. A linear ramp needs no transcendental function and snaps to its exact target.
+- Fades are linear and frame-based: 20 ms for play, pause, volume, and device resume; 1 s for the opening ramp at session start; `fade_ms` for a type crossfade; 20 s at stop-after expiry. A linear ramp needs no transcendental function and snaps to its exact target.
 - Soft clip is a safety net; the gain should prevent clipping in the first place.
 - Denormals: generation is skipped while the envelope is at zero, and fades snap to their exact target, so filters never process denormal input and the envelope never lingers near it. No flush-to-zero setup is needed.
 - Blue, gray, and green are out of v1. Do not implement them.
@@ -218,6 +218,7 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | M8 | M7 + Windows named pipe, per-user ACL, detached daemon, Windows IPC test | 116 KB Linux | 150 KB |
 | M8 | Windows 10/11, MSVC 19, `/MT /O1 /GL`, WASAPI only | 292 KB (299,520 bytes) | 300 KB |
 | v1.0.0 | M8 source, built by CI on Ubuntu 24.04 with GCC 13 | 126 KB (129,400 bytes) | 150 KB |
+| v1.0.1 | v1.0.0 + opening ramp, default volume 20; Fedora 44, GCC 16.2.1 | 116 KB (118,472 bytes) | 150 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
@@ -230,6 +231,8 @@ M7 note: the file grew from 110,120 to 118,472 bytes (+8,352). `.text` is 108,03
 M8 note: the Linux file did not move (118,472 bytes); `.text` grew by 180 bytes to 108,217 because the Windows branch is preprocessed out and only the `reply_and_release` path is new. The first Windows build measured **318,976 bytes (311 KB)**, 12 KB over budget: the named pipe, the SID/DACL code, the detach path, and `advapi32` were enough to cross a line the M7 binary was already close to. Compiling out DirectSound and WinMM (`MA_NO_DSOUND`, `MA_NO_WINMM`) brought it to **299,520 bytes (292 KB)**, 8 KB under. Windows 10/11 needs WASAPI; the two legacy backends cost more than the whole IPC layer. The Windows job prints the size before the gate so the number is in the log.
 
 v1.0.0 note: the published Linux archive measures **129,400 bytes (126 KB)**. It is built by CI on Ubuntu 24.04 with GCC 13, not by the Fedora 44 toolchain the milestone rows record, and the 11 KB gap is compiler and linker version rather than code. The Windows payload is unchanged at 299,520 bytes. Both stay under the gate; the README publishes the archive size and names the local Fedora figure next to it, so a reader who downloads the binary sees the number that describes what they got.
+
+v1.0.1 note: the file did not move (118,472 bytes); `.text` grew by 89 bytes to 108,306 for the opening-fade setter and its one call site. A 10 s window on the same machine measured 6.8 MB RSS steady, 9.0 MB peak, and 1.00% of one core, inside the published band. The Windows payload is unchanged.
 
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 

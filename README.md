@@ -18,12 +18,14 @@ network connection. Linux (x86_64) and Windows 10/11 (x86_64).
 ```sh
 tinyambient --noise pink    # start playing; the command returns at once
 tinyambient --status        # see what is running
-tinyambient --volume 40     # change it from any terminal
+tinyambient --volume 35     # change it from any terminal
 tinyambient --quit          # stop
 ```
 
 The first command starts a small background process. Everything after it talks
-to that process, so the session survives between terminals and shells.
+to that process, so the session survives between terminals and shells. A new
+session uses pink noise at volume 20 and opens over a second, so it never lands
+at full level unannounced.
 
 ## What you get
 
@@ -181,10 +183,10 @@ full list.
 `--status` prints a short, fixed list of lines:
 
 ```text
-version=1.0.0
+version=1.0.1
 playing=1
 noise=pink
-volume=40
+volume=20
 mono=0
 stop_after=off
 ```
@@ -207,7 +209,7 @@ rewrites the file.
 ```ini
 [general]
 noise=pink
-volume=40
+volume=20
 mono=false
 fade_ms=250
 ```
@@ -215,7 +217,7 @@ fade_ms=250
 | Key | Default | What it does |
 |---|---|---|
 | `noise` | `pink` | `white`, `pink`, or `brown`. |
-| `volume` | `40` | 0-100. |
+| `volume` | `20` | 0-100. |
 | `mono` | `false` | `true` sends one channel to both ears. |
 | `fade_ms` | `250` | Crossfade length when the noise changes, 0-2000 ms. |
 

@@ -20,6 +20,11 @@ typedef struct wn_engine wn_engine;
 #define WN_FADE_MS 20
 #define WN_STOP_FADE_MS 20000
 
+/* The opening ramp a session uses instead of WN_FADE_MS. A fresh daemon should
+ * not jump to the saved level, so the first second swells from silence
+ * (FR-09). Rendering keeps the short fade, so offline output stays identical. */
+#define WN_OPENING_FADE_MS 1000
+
 wn_engine *wn_engine_create(const wn_config *cfg);
 void wn_engine_destroy(wn_engine *e);
 
@@ -27,6 +32,12 @@ void wn_engine_destroy(wn_engine *e);
  * depend on the seed alone (PRD NFR-06). Must run before the audio thread
  * exists. */
 void wn_engine_set_seed(wn_engine *e, uint64_t seed);
+
+/* Replaces the opening ramp of `ms` milliseconds, clamped to 0..5000. The ramp
+ * still starts at silence, so the first sample is click-free; it just takes
+ * longer to reach the saved level. Zero restores the default WN_FADE_MS. Like
+ * wn_engine_set_seed, this must run before the audio thread exists. */
+void wn_engine_set_opening_fade(wn_engine *e, unsigned ms);
 
 /* Applies one command line ("noise pink", "volume 40", "toggle"). Returns 0 on
  * success, non-zero for an unknown or invalid command. The line is copied, so
