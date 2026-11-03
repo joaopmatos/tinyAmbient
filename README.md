@@ -9,7 +9,7 @@
 White, pink, or brown noise from one small binary. No account, no ads, no
 network connection. Linux (x86_64) and Windows 10/11 (x86_64).
 
-[![tinyAmbient in a terminal](https://asciinema.org/a/IcMxXOVeztbSVEGa.svg)](https://asciinema.org/a/IcMxXOVeztbSVEGa)
+![tinyAmbient in a terminal](docs/demo.gif)
 
 *A 15 second tour of the CLI.*
 
