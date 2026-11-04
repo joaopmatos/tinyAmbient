@@ -1,4 +1,4 @@
-# tinyAmbient
+# tinyAmbient — white, pink, and brown noise from your terminal
 
 <p align="center">
   <img src="docs/logo.svg" width="120" alt="tinyAmbient logo">
@@ -6,8 +6,9 @@
 
 **Background noise for your workday, without the browser tab.**
 
-White, pink, or brown noise from one small binary. No account, no ads, no
-network connection. Linux (x86_64) and Windows 10/11 (x86_64).
+tinyAmbient is a command-line white, pink, and brown noise generator for Linux
+(x86_64) and Windows 10/11 (x86_64). It runs as one ~120 KB binary: no browser
+tab, no account, no ads, no network connection.
 
 ![tinyAmbient in a terminal](docs/demo.gif)
 
@@ -183,7 +184,7 @@ full list.
 `--status` prints a short, fixed list of lines:
 
 ```text
-version=1.0.2
+version=1.0.3
 playing=1
 noise=pink
 volume=20
@@ -274,6 +275,47 @@ The build enforces the size budget: 150 KB on Linux and 300 KB on Windows.
 - `docs/ARCHITECTURE.md` - internal design.
 - `AGENTS.md` - constraints, layers, build, size budget.
 - `scripts/measure.sh` - the memory and CPU numbers above, on your hardware.
+
+## FAQ
+
+### Is there a white, pink, or brown noise generator for the command line?
+
+Yes. tinyAmbient generates all three in-process and switches between them from
+the same command:
+
+```sh
+tinyambient --noise white
+tinyambient --noise pink
+tinyambient --noise brown
+```
+
+### Does it work offline?
+
+Completely. tinyAmbient opens no network sockets. The only thing it needs is the
+audio stack your desktop already runs.
+
+### Do I need to install anything on Windows?
+
+No. Extract `tinyambient.exe` and run it. Adding the folder to `PATH` is optional
+and only saves typing the full path.
+
+### Can it stop on its own after a set time?
+
+Yes. `tinyambient --stop-after 90` starts a 90 minute timer, `--stop-after off`
+cancels it, and the range is 1 to 10080 minutes. An expired timer fades out over
+20 seconds instead of cutting off, and `play` during that fade cancels it.
+
+### Can I run it on a headless machine or over SSH?
+
+Playback needs an audio device, so a machine with no sound card gets silence. On
+that machine you can still write the noise to a file with `--render`, which needs
+no device at all.
+
+### Why is it only 120 KB?
+
+Because it does one thing. There is no GUI, no tray icon, no decoder, no network
+client, and no bundled runtime. Size and memory are gated on every build, so the
+binary fails CI instead of quietly growing.
 
 ## License
 
