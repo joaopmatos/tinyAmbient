@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="sp-title sp-desc">
+  <title id="sp-title">tinyAmbient — white, pink, and brown noise from your terminal</title>
+  <desc id="sp-desc">Dark card showing the tinyAmbient logo, its name, the tagline "White, pink, and brown noise from your terminal", and a footer reading Linux, Windows, about 120 KB, no install.</desc>
+
+  <rect width="1280" height="640" fill="#14161c"/>
+  <rect x="12" y="12" width="1256" height="616" rx="20" fill="none" stroke="#262b34" stroke-width="2"/>
+
+  <g transform="translate(0,-34)">
+  <!-- app icon: docs/logo.svg at 1.8125x -->
+  <g transform="translate(96,228) scale(1.8125)">
+    <rect width="128" height="128" rx="28" fill="#191c24"/>
+    <rect x="1" y="1" width="126" height="126" rx="27" fill="none" stroke="#2a2f3a" stroke-width="2"/>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="4">
+      <polyline stroke="#f4f6fa" points="20,40 25.5,32 31,47 36.5,35 42,46 47.5,33 53,48 58.5,37 64,45 69.5,32 75,47 80.5,36 86,46 91.5,34 97,48 102.5,38 108,42"/>
+      <polyline stroke="#f290bb" points="20,64 28.8,58 37.6,69 46.4,60 55.2,68 64,59 72.8,69 81.6,61 90.4,67 99.2,60 108,64"/>
+      <path stroke="#c98a55" d="M20 88 Q31 77 42 88 T64 88 T86 88 T108 88"/>
+    </g>
+  </g>
+
+  <text x="368" y="296" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="96" font-weight="700" letter-spacing="-1" fill="#f4f6fa">tinyAmbient</text>
+
+  <g>
+    <rect x="368" y="340" width="182" height="4" rx="2" fill="#f4f6fa"/>
+    <rect x="554" y="340" width="182" height="4" rx="2" fill="#f290bb"/>
+    <rect x="740" y="340" width="182" height="4" rx="2" fill="#c98a55"/>
+  </g>
+
+  <text x="368" y="400" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="40" fill="#b9c0cd">White, pink, and brown noise</text>
+  <text x="368" y="448" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="40" fill="#b9c0cd">from your terminal.</text>
+
+  <text x="368" y="520" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="29" letter-spacing="1.5" fill="#8b93a3">Linux  ·  Windows  ·  ~120 KB  ·  no installer</text>
+  </g>
+</svg>
