@@ -671,6 +671,9 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
         (void)snprintf(err, err_cap, "cannot resolve the runtime directory");
         goto fail;
     }
+    if (wn_paths_make_runtime_dir(err, err_cap) != 0) {
+        goto fail;
+    }
     if (strlen(path) >= WN_SOCKET_PATH_MAX) {
         (void)snprintf(err, err_cap, "the IPC socket path is too long");
         goto fail;

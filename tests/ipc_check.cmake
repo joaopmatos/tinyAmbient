@@ -48,6 +48,27 @@ function(expect_ok label)
     endif()
 endfunction()
 
+# Runs the binary with no usable XDG_RUNTIME_DIR, which forces the private
+# fallback directory under TMPDIR. An empty value is what the product treats as
+# unset, and cmake -E env keeps the variable present but empty.
+function(run_exe_tmp)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "XDG_CONFIG_HOME=${XDG}"
+            "XDG_RUNTIME_DIR="
+            "TMPDIR=${TMP_FALLBACK}"
+            "TINYAMBIENT_AUDIO=null"
+            "${BINARY}" ${ARGN}
+        RESULT_VARIABLE result
+        TIMEOUT 60
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE errors)
+
+    set(TA_OUT "${output}" PARENT_SCOPE)
+    set(TA_ERR "${errors}" PARENT_SCOPE)
+    set(TA_CODE "${result}" PARENT_SCOPE)
+endfunction()
+
 function(expect_status label playing noise volume mono)
     if(NOT TA_CODE EQUAL 0)
         message(FATAL_ERROR
@@ -321,5 +342,48 @@ run_exe(--foreground --quit)
 expect_ok("foreground quit without a daemon")
 run_exe(--status)
 expect_status("status after the no-op foreground quit" 0 brown 25 1)
+
+# --- The XDG-less fallback lives in a private directory ---------------------
+#
+# $TMPDIR is shared and world-writable, so the fallback address must sit in a
+# directory the daemon creates with mode 0700 and refuses to reuse if it belongs
+# to someone else. This is the only place that path is exercised.
+
+set(TMP_FALLBACK "${SANDBOX}/tmp")
+file(MAKE_DIRECTORY "${TMP_FALLBACK}")
+execute_process(COMMAND chmod 700 "${TMP_FALLBACK}")
+execute_process(COMMAND id -u
+    OUTPUT_VARIABLE uid OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+run_exe_tmp()
+expect_ok("fallback start")
+set(FALLBACK_DIR "${TMP_FALLBACK}/tinyambient-${uid}")
+set(FALLBACK_SOCKET "${FALLBACK_DIR}/tinyambient.sock")
+if(NOT EXISTS "${FALLBACK_SOCKET}")
+    message(FATAL_ERROR
+        "ipc_check: the fallback socket is not at ${FALLBACK_SOCKET}")
+endif()
+
+execute_process(COMMAND stat -c %a "${FALLBACK_DIR}"
+    OUTPUT_VARIABLE fallback_dir_mode OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT fallback_dir_mode STREQUAL "700")
+    message(FATAL_ERROR
+        "ipc_check: the fallback directory is ${fallback_dir_mode}, expected 700")
+endif()
+execute_process(COMMAND stat -c %a "${FALLBACK_SOCKET}"
+    OUTPUT_VARIABLE fallback_socket_mode OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT fallback_socket_mode STREQUAL "600")
+    message(FATAL_ERROR
+        "ipc_check: the fallback socket is ${fallback_socket_mode}, expected 600")
+endif()
+
+run_exe_tmp(--status)
+expect_status("fallback status" 1 brown 25 1)
+
+run_exe_tmp(quit)
+expect_ok("fallback quit")
+if(EXISTS "${FALLBACK_SOCKET}")
+    message(FATAL_ERROR "ipc_check: the fallback quit left the socket behind")
+endif()
 
 message(STATUS "ipc_check: ok")

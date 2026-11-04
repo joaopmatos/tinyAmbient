@@ -311,16 +311,91 @@ int wn_paths_ipc_address(char *out, size_t cap)
     LocalFree(text);
     free(sid);
     return result;
-#else
+#else /* POSIX */
+
     const char *runtime = getenv("XDG_RUNTIME_DIR");
+    const char *tmp;
 
     if (runtime != NULL && runtime[0] != '\0') {
         return format_path(out, cap, "%s/tinyambient.sock", runtime);
     }
 
-    /* Without XDG_RUNTIME_DIR there is no per-user directory, so the fallback
-     * carries the uid to keep users apart. */
-    return format_path(out, cap, "/tmp/tinyambient-%lu.sock",
+    /* Without XDG_RUNTIME_DIR there is no per-user directory to inherit, so the
+ * fallback gets one of its own: $TMPDIR (or /tmp) is shared and world-writable,
+ * but a 0700 directory inside it is not. wn_paths_make_runtime_dir creates and
+ * ownership-checks it before the daemon binds anything there. */
+    tmp = getenv("TMPDIR");
+    if (tmp == NULL || tmp[0] == '\0') {
+        tmp = "/tmp";
+    }
+    return format_path(out, cap, "%s/tinyambient-%lu/tinyambient.sock", tmp,
                        (unsigned long)getuid());
+#endif
+}
+
+int wn_paths_make_runtime_dir(char *err, size_t err_cap)
+{
+#if defined(_WIN32)
+    /* The pipe lives in the kernel namespace; there is no directory to
+     * create. */
+    (void)err;
+    (void)err_cap;
+    return 0;
+#else
+    const char *runtime = getenv("XDG_RUNTIME_DIR");
+    const char *tmp;
+    struct stat info;
+    char path[WN_PATH_MAX];
+    int written;
+
+    if (runtime != NULL && runtime[0] != '\0') {
+        /* The session manager owns the directory and its permissions. */
+        return 0;
+    }
+
+    tmp = getenv("TMPDIR");
+    if (tmp == NULL || tmp[0] == '\0') {
+        tmp = "/tmp";
+    }
+    written = snprintf(path, sizeof(path), "%s/tinyambient-%lu", tmp,
+                       (unsigned long)getuid());
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+        (void)snprintf(err, err_cap,
+                       "the IPC runtime directory path is too long");
+        return -1;
+    }
+
+    if (mkdir(path, 0700) == 0) {
+        return 0;
+    }
+    if (errno != EEXIST) {
+        (void)snprintf(err, err_cap, "cannot create the IPC runtime directory");
+        return -1;
+    }
+
+    /* A file already there must be our own directory: lstat rejects a symlink,
+     * and the sticky bit on /tmp keeps another user from replacing our entry
+     * once the ownership check passes. */
+    if (lstat(path, &info) != 0 || !S_ISDIR(info.st_mode)) {
+        (void)snprintf(err, err_cap,
+                       "the IPC runtime directory is not a directory");
+        return -1;
+    }
+    if (info.st_uid != getuid()) {
+        (void)snprintf(err, err_cap,
+                       "the IPC runtime directory belongs to another user");
+        return -1;
+    }
+    if ((info.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+        /* Ours, but a wider umask left it open: close it instead of refusing
+         * to start. */
+        if (chmod(path, 0700) != 0) {
+            (void)snprintf(err, err_cap,
+                           "cannot protect the IPC runtime directory");
+            return -1;
+        }
+    }
+
+    return 0;
 #endif
 }

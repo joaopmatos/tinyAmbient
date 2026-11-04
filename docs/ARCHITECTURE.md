@@ -318,8 +318,12 @@ Resolves the config directory. The only place that touches `getenv`, `HOME`, or 
 - Portable mode never creates the executable's directory. The atomic write then
   fails with a clear message when that directory is not writable.
 - `wn_paths_ipc_address` resolves `$XDG_RUNTIME_DIR/tinyambient.sock`, falling
-  back to `/tmp/tinyambient-<uid>.sock`. The fallback carries the uid because
-  `/tmp` is shared; the socket itself is still mode `0600`.
+  back to `$TMPDIR/tinyambient-<uid>/tinyambient.sock` (`/tmp` when `TMPDIR` is
+  unset). `wn_paths_make_runtime_dir` creates that fallback directory with mode
+  `0700` and rejects an existing one unless it is a directory owned by the
+  current user, so a stale socket or a hostile pre-created path cannot redirect
+  or block the daemon. With `XDG_RUNTIME_DIR` set the session manager owns the
+  directory and nothing is created. The socket itself is still mode `0600`.
 - On Windows it resolves `\\.\pipe\tinyambient-<sid>` from the user SID;
   `wn_paths_user_sid` returns the same SID for the pipe's DACL. `TINYAMBIENT_IPC`
   replaces the whole name, because Windows has no per-test runtime directory and
@@ -414,7 +418,7 @@ dispatch, and quit.
 
 | OS | Address | Permissions |
 |---|---|---|
-| Linux | `$XDG_RUNTIME_DIR/tinyambient.sock` (fallback `/tmp/tinyambient-<uid>.sock`) | `0600` |
+| Linux | `$XDG_RUNTIME_DIR/tinyambient.sock` (fallback `$TMPDIR/tinyambient-<uid>/tinyambient.sock` in a `0700` directory) | `0600` |
 | Windows | `\\.\pipe\tinyambient-<sid>` | DACL grants the current user only |
 
 Startup sequence for any invocation:

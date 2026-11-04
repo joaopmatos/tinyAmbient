@@ -104,7 +104,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 
 **FR-06 Config persistence.** Commands that change a persisted setting (`noise`, `volume`, `mono`, `stereo`) apply to the daemon and write configuration. Playback commands (`play`, `pause`, `toggle`) and `stop-after` change session state only and never write. Writes are atomic: temporary file in the target directory, `fsync`, `rename`. `--status`, `--render`, `--help`, and `--version` never write.
 
-**FR-07 Single instance.** One daemon per user session. A second invocation forwards its command over IPC and exits. Linux: Unix socket at `$XDG_RUNTIME_DIR/tinyambient.sock`, mode `0600`. Windows: named pipe at `\\.\pipe\tinyambient-<sid>` restricted to the current user.
+**FR-07 Single instance.** One daemon per user session. A second invocation forwards its command over IPC and exits. Linux: Unix socket at `$XDG_RUNTIME_DIR/tinyambient.sock`, mode `0600`; without `XDG_RUNTIME_DIR`, the socket lives in a `0700` per-user directory under `$TMPDIR` (or `/tmp`), and an existing directory owned by another user is refused. Windows: named pipe at `\\.\pipe\tinyambient-<sid>` restricted to the current user.
 
 **FR-08 Status output.** `--status` prints exactly six lines on stdout, in this order, with no spaces around `=`, each terminated by a newline:
 

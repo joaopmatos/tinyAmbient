@@ -23,9 +23,18 @@ int wn_paths_make_config_dir(const char *file, int portable, char *err,
                              size_t err_cap);
 
 /* <runtime-dir>/tinyambient.sock on Linux: $XDG_RUNTIME_DIR when set, otherwise
- * /tmp/tinyambient-<uid>.sock. On Windows: \\.\pipe\tinyambient-<sid>, or
- * $TINYAMBIENT_IPC when the test suite needs a private pipe. */
+ * $TMPDIR (or /tmp)/tinyambient-<uid>/tinyambient.sock. On Windows:
+ * \\.\pipe\tinyambient-<sid>, or $TINYAMBIENT_IPC when the test suite needs a
+ * private pipe. */
 int wn_paths_ipc_address(char *out, size_t cap);
+
+/* Ensures the directory that holds the IPC address exists and belongs to the
+ * current user. With XDG_RUNTIME_DIR set the session manager owns it and this
+ * is a no-op; otherwise the fallback directory is created with mode 0700 and an
+ * existing one is rejected unless it is a directory owned by this user. Windows
+ * has no such directory. Returns 0 on success or non-zero with a message in
+ * `err`. */
+int wn_paths_make_runtime_dir(char *err, size_t err_cap);
 
 #if defined(_WIN32)
 /* Returns a heap copy of the current user's SID, for the DACL that restricts
