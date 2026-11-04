@@ -242,6 +242,8 @@ v1.0.2 note: the file grew by 72 bytes to 118,544; `.text` is 108,696 (+390) and
 
 v1.0.3 note: the file did not move (118,544 bytes); `.text` is 109,565 (+869) and `.data` 1,404 (+8). The helpers that moved into `core/text.c` cost nothing net — LTO folded the identical bodies — so the growth is the new code: `wn_paths_make_runtime_dir` (mkdir, lstat, ownership and mode checks), `fsync_parent`, and the SID-sized pipe DACL. The Windows payload grew by 512 bytes to **300,032 bytes (293 KB)** when the background path took the same pre-bind ordering as `--foreground`; the gate budget is 307,200 bytes, so the margin is now about 7 KB, the tightest it has been. Linux CI also kept the resource gate at 2,340 KB peak RSS and 0.2% CPU.
 
+The published v1.0.3 Linux archive measures **129,400 bytes (126 KB)**, the same file size as v1.0.0 and v1.0.1 even though its `.text` grew to 117,849: the last loadable segment is page-aligned and the change stays inside its padding. The Ubuntu 24.04/GCC 13 build is about 8 KB larger than the Fedora 44/GCC 16 build in `.text`, which is the same compiler-and-linker gap the v1.0.0 note records.
+
 M0 note: nothing calls into miniaudio yet, so `--gc-sections` removes it entirely. A probe that references `ma_context_init` with the ALSA and PulseAudio backends measures **81 KB**, which is the realistic figure the binary will reach at M4 once the device is actually opened.
 
 ### Resource measurements
