@@ -304,12 +304,26 @@ int wn_platform_run(wn_engine *e, wn_session *s)
 
     atomic_store_explicit(&quit_requested, 0, memory_order_relaxed);
 
-    /* SIGINT and SIGTERM are both ISO C signal numbers, so this works on
-     * Windows as well. A second Ctrl+C falls back to the default terminate
-     * action, which is a fine escape hatch if the loop ever wedges. */
+#if defined(_WIN32)
+    /* The Windows CRT restores the default disposition after the handler runs,
+     * so a second Ctrl+C terminates a wedged loop. */
     (void)signal(SIGINT, quit_handler);
     (void)signal(SIGTERM, quit_handler);
-#if !defined(_WIN32)
+#else
+    /* SA_RESETHAND gives POSIX the same escape hatch: the first signal asks the
+     * loop to stop, a second one takes the default terminate action. sigaction
+     * rather than signal(): glibc keeps a signal() handler installed (BSD
+     * semantics), so the second Ctrl+C would be a no-op. */
+    {
+        struct sigaction action;
+
+        memset(&action, 0, sizeof(action));
+        action.sa_handler = quit_handler;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = SA_RESETHAND;
+        (void)sigaction(SIGINT, &action, NULL);
+        (void)sigaction(SIGTERM, &action, NULL);
+    }
     /* A client that disconnects mid-reply must not take the daemon down. */
     (void)signal(SIGPIPE, SIG_IGN);
 #endif

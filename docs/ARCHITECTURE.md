@@ -376,10 +376,12 @@ dispatch, and quit.
   sending the final `ok`, so a client that sees the reply can neither observe a
   stale socket nor collide with this daemon while it stops the audio device.
 - SIGINT, SIGTERM, and SIGPIPE handling: the first two set an atomic quit flag
-  from the handler (`signal()` plus a lock-free store, both async-signal-safe);
-  the third is ignored so a vanished client cannot kill the daemon. Any thread
-  may also call `wn_platform_request_quit`, which is how the test harness stops
-  the loop.
+  from the handler (`sigaction` with `SA_RESETHAND` on POSIX, `signal()` on
+  Windows, plus a lock-free store in both cases, all async-signal-safe), so a
+  second Ctrl+C restores the default terminate action for a wedged loop; the
+  third is ignored so a vanished client cannot kill the daemon. Any thread may
+  also call `wn_platform_request_quit`, which is how the test harness stops the
+  loop.
 - `stop_fade_ms` is a parameter so a test build can shorten the product's 20 s
   fade without a second code path.
 - `wn_platform_detach` forks once, calls `setsid`, redirects the standard

@@ -183,7 +183,7 @@ full list.
 `--status` prints a short, fixed list of lines:
 
 ```text
-version=1.0.1
+version=1.0.2
 playing=1
 noise=pink
 volume=20

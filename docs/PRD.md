@@ -109,7 +109,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 **FR-08 Status output.** `--status` prints exactly six lines on stdout, in this order, with no spaces around `=`, each terminated by a newline:
 
 ```
-version=1.0.1
+version=1.0.2
 playing=1
 noise=pink
 volume=20
@@ -131,7 +131,7 @@ stop_after=off
 
 **FR-14 Exit codes and diagnostics.** Exit codes: `0` success, `1` runtime failure (audio device, config write, render I/O), `2` usage error, `3` IPC failure. Errors print to stderr prefixed with `tinyambient: `.
 
-**FR-15 Version and help.** `--version` prints `tinyambient 1.0.0` and exits 0. `--help` prints usage and exits 0.
+**FR-15 Version and help.** `--version` prints `tinyambient 1.0.2` and exits 0. `--help` prints usage and exits 0.
 
 **FR-16 Device failure recovery.** When the audio device stops or is removed, the daemon retries initialization with backoff (100 ms, 500 ms, 2 s, then every 5 s). Parameters and playback state are preserved. Resuming produces no click.
 
@@ -250,7 +250,11 @@ Unknown keys and comments are ignored and preserved on rewrite. Malformed values
 | M8 | Windows parity | All FRs pass on Windows 10/11 |
 
 M0–M7 constitute the Linux release. M8 closes v1. v1.0.1 is a patch on M8: the
-saved default drops to volume 20 and a session start fades in over 1 s.
+saved default drops to volume 20 and a session start fades in over 1 s. v1.0.2
+fixes `play` during a stop fade (it cancels the pending pause), makes
+`--foreground` forward `quit` and bind the single-instance address before it
+persists anything, and restores the default terminate action on a second
+Ctrl+C.
 
 ## 12. Risks
 
