@@ -69,7 +69,13 @@ static int executable_dir(char *out, size_t cap)
     if (slash == NULL || slash == exe) {
         return -1;
     }
-    *slash = '\0';
+    if (slash == exe + 2 && exe[1] == ':') {
+        /* The executable sits in a drive root: "C:" alone means the current
+         * directory on C, so the separator has to stay. */
+        slash[1] = '\0';
+    } else {
+        *slash = '\0';
+    }
 #else
     char exe[WN_PATH_MAX];
     ssize_t length;
@@ -84,10 +90,16 @@ static int executable_dir(char *out, size_t cap)
     exe[length] = '\0';
 
     slash = strrchr(exe, '/');
-    if (slash == NULL || slash == exe) {
+    if (slash == NULL) {
         return -1;
     }
-    *slash = '\0';
+    if (slash == exe) {
+        /* The executable sits in the filesystem root: keep the separator,
+         * because an empty directory is not a path. */
+        exe[1] = '\0';
+    } else {
+        *slash = '\0';
+    }
 #endif
 
     if (strlen(exe) >= cap) {
@@ -119,6 +131,10 @@ int wn_paths_config_file(char *out, size_t cap, int portable)
         if (appdata == NULL || appdata[0] == '\0') {
             return -1;
         }
+        /* Camel case on purpose: this directory is user-visible under APPDATA,
+         * while the Unix one follows the lowercase XDG convention. Windows
+         * compares paths case-insensitively, so the two spellings cannot
+         * collide. */
         return format_path(out, cap, "%s\\tinyAmbient\\config.ini", appdata);
     }
 #else
