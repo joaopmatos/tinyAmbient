@@ -289,7 +289,7 @@ budget needs the measurement that justifies it, in the same diff (rule 10).
 ## 5. Pitfalls
 
 - **`dlopen` without fallback:** try ALSA and Pulse; report a clear error when neither exists.
-- **Corrupted config:** atomic write (temp file + `fsync` + `rename`) in the same directory.
+- **Corrupted config:** atomic write (temp file + `fsync` + `rename` + directory `fsync`) in the same directory.
 - **Portable mode without write permission:** fail with a clear message; never write elsewhere.
 - **Hotplug:** a device removed mid-playback is reinitialized with backoff on the main thread, preserving state.
 - **Clipping:** volume 100 and a crossfade must not sum above 1.0.

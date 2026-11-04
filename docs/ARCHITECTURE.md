@@ -126,8 +126,8 @@ size_t wn_config_format(const wn_config *cfg, const char *original,
   full text needs, so a value `>= cap` signals truncation. With `out == NULL`
   and `cap == 0` it only measures.
 
-The atomic write (temp file + `fsync` + `rename`) lives in the layer that owns
-I/O, not here; see `platform/config_file.c` below.
+The atomic write (temp file + `fsync` + `rename` + directory `fsync`) lives in
+the layer that owns I/O, not here; see `platform/config_file.c` below.
 
 ---
 
@@ -347,7 +347,10 @@ this module owns the path-dependent parts.
      `path.tmp.<pid>` on Windows);
   2. `fwrite`, `fflush`, `fsync` (`_commit` on Windows);
   3. `rename` (`MoveFileExA` with replace on Windows);
-  4. remove the temporary file on any failure.
+  4. on POSIX, `fsync` the parent directory, so the rename itself is durable.
+     `EINVAL` and `ENOTSUP` are ignored: a filesystem that cannot sync a
+     directory should not fail an otherwise successful save;
+  5. remove the temporary file on any failure.
 - POSIX temporary files are created with mode `0600`, and the rename preserves
   that mode, so the configuration is never group- or world-readable.
 - No temporary file survives a failed save.

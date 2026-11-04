@@ -7,6 +7,7 @@
 #include "platform/config_file.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -138,6 +139,42 @@ static int atomic_write(const char *path, const char *text, size_t length)
     return 0;
 }
 #else
+/* Flushes the directory entry the rename created, so a save that returned
+ * success survives a power loss. Without this the file contents are durable
+ * but the name that points at them is not, and a crash can leave the previous
+ * version in place. A filesystem that cannot sync a directory (EINVAL,
+ * ENOTSUP) is reported to the caller, which ignores exactly those two codes. */
+static int fsync_parent(const char *path)
+{
+    char parent[WN_PATH_MAX];
+    char *slash;
+    int descriptor;
+    int result;
+
+    if (strlen(path) >= sizeof(parent)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(parent, path, strlen(path) + 1);
+
+    slash = strrchr(parent, '/');
+    if (slash == NULL) {
+        memcpy(parent, ".", sizeof("."));
+    } else if (slash == parent) {
+        parent[1] = '\0'; /* the filesystem root */
+    } else {
+        *slash = '\0';
+    }
+
+    descriptor = open(parent, O_RDONLY | O_DIRECTORY);
+    if (descriptor < 0) {
+        return -1;
+    }
+    result = fsync(descriptor);
+    (void)close(descriptor);
+    return result;
+}
+
 static int atomic_write(const char *path, const char *text, size_t length)
 {
     char temporary[WN_PATH_MAX];
@@ -179,6 +216,10 @@ static int atomic_write(const char *path, const char *text, size_t length)
 
     if (rename(temporary, path) != 0) {
         (void)unlink(temporary);
+        return -1;
+    }
+
+    if (fsync_parent(path) != 0 && errno != EINVAL && errno != ENOTSUP) {
         return -1;
     }
 

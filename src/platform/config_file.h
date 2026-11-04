@@ -6,7 +6,8 @@
 #include "core/config.h"
 
 /* Config file I/O. The parser and formatter stay in core/; this module owns the
- * paths, the directory, and the atomic write (temp file + fsync + rename). */
+ * paths, the directory, and the atomic write (temp file, fsync, rename, fsync of
+ * the directory). */
 
 /* A config file is a few hundred bytes. The fixed cap keeps the loader simple
  * and makes a runaway file a reported condition instead of an allocation. */
