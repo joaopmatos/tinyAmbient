@@ -305,12 +305,6 @@ Yes. `tinyambient --stop-after 90` starts a 90 minute timer, `--stop-after off`
 cancels it, and the range is 1 to 10080 minutes. An expired timer fades out over
 20 seconds instead of cutting off, and `play` during that fade cancels it.
 
-### Can I run it on a headless machine or over SSH?
-
-Playback needs an audio device, so a machine with no sound card gets silence. On
-that machine you can still write the noise to a file with `--render`, which needs
-no device at all.
-
 ### Why is it only 120 KB?
 
 Because it does one thing. There is no GUI, no tray icon, no decoder, no network
