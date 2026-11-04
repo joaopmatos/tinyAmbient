@@ -473,7 +473,10 @@ Windows: the same contract over a byte-mode named pipe. Differences that matter:
   `ConnectNamedPipe` stays pending across ticks; `ERROR_PIPE_CONNECTED` covers
   the client that arrived between creation and the call.
 - The DACL grants `GENERIC_ALL` to the current user SID and nothing else, which
-  is the named-pipe equivalent of the socket's `0600`.
+  is the named-pipe equivalent of the socket's `0600`. The ACL is sized from
+  `GetLengthSid` rather than a fixed buffer: accounts with many subauthorities
+  would otherwise fail the pipe creation on a sizing problem, not a permissions
+  one.
 - The instance is the connection, so a reply must be written and flushed before
   the instance is disconnected; `wn_ipc_server_reply_and_release` keeps that
   ordering per platform. The client reads until the newline and treats a broken

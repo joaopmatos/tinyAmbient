@@ -198,27 +198,43 @@ int wn_ipc_client_send(const char *line, char *reply, size_t cap)
 }
 
 /* Builds the SECURITY_ATTRIBUTES that restrict the pipe to the current user.
- * `storage` holds the ACL and must outlive the CreateNamedPipe call. */
+ * The ACL is sized from the real SID: domain and Entra accounts can carry more
+ * subauthorities than a fixed buffer would hold, and a too-small buffer fails
+ * with an unrelated error. *acl_out receives the allocation, which must stay
+ * alive until CreateNamedPipeA has copied it. */
 static int build_security(SECURITY_ATTRIBUTES *sa, SECURITY_DESCRIPTOR *sd,
-                          DWORD *storage, size_t storage_bytes)
+                          PACL *acl_out)
 {
+    DWORD sid_bytes;
+    DWORD acl_bytes;
+    PACL acl;
     void *sid;
     int result = -1;
 
+    *acl_out = NULL;
     sid = wn_paths_user_sid();
     if (sid == NULL) {
         return -1;
     }
 
-    if (InitializeAcl((PACL)storage, (DWORD)storage_bytes, ACL_REVISION) &&
-        AddAccessAllowedAce((PACL)storage, ACL_REVISION, GENERIC_ALL,
-                            (PSID)sid) &&
+    sid_bytes = GetLengthSid((PSID)sid);
+    /* The ACL header plus one ACCESS_ALLOWED_ACE, whose SID is spliced in at
+     * the SidStart field that the structure already counts as one DWORD. */
+    acl_bytes = (DWORD)(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) -
+                        sizeof(DWORD) + sid_bytes);
+
+    acl = malloc(acl_bytes);
+    if (acl != NULL && InitializeAcl(acl, acl_bytes, ACL_REVISION) &&
+        AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, (PSID)sid) &&
         InitializeSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION) &&
-        SetSecurityDescriptorDacl(sd, TRUE, (PACL)storage, FALSE)) {
+        SetSecurityDescriptorDacl(sd, TRUE, acl, FALSE)) {
         sa->nLength = sizeof(*sa);
         sa->lpSecurityDescriptor = sd;
         sa->bInheritHandle = FALSE;
+        *acl_out = acl;
         result = 0;
+    } else {
+        free(acl);
     }
 
     free(sid);
@@ -229,9 +245,10 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
 {
     SECURITY_ATTRIBUTES sa;
     SECURITY_DESCRIPTOR sd;
-    DWORD acl[64];
+    PACL acl = NULL;
     wn_ipc_server *s;
     char name[WN_PATH_MAX];
+    DWORD create_error;
 
     s = calloc(1, sizeof(*s));
     if (s == NULL) {
@@ -245,7 +262,7 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
         (void)snprintf(err, err_cap, "cannot resolve the IPC pipe name");
         goto fail;
     }
-    if (build_security(&sa, &sd, acl, sizeof(acl)) != 0) {
+    if (build_security(&sa, &sd, &acl) != 0) {
         (void)snprintf(err, err_cap,
                        "cannot restrict the IPC pipe to the current user");
         goto fail;
@@ -256,10 +273,14 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
     s->pipe = CreateNamedPipeA(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
                                1, WN_PIPE_BUFFER, WN_PIPE_BUFFER, 0, &sa);
-    if (s->pipe == INVALID_HANDLE_VALUE) {
-        DWORD error = GetLastError();
+    /* Read the error before freeing the ACL: the heap can touch it. */
+    create_error = GetLastError();
+    free(acl);
+    acl = NULL;
 
-        if (error == ERROR_ACCESS_DENIED || error == ERROR_PIPE_BUSY) {
+    if (s->pipe == INVALID_HANDLE_VALUE) {
+        if (create_error == ERROR_ACCESS_DENIED ||
+            create_error == ERROR_PIPE_BUSY) {
             (void)snprintf(err, err_cap, "another daemon is already running");
         } else {
             (void)snprintf(err, err_cap, "cannot create the IPC pipe");
@@ -277,6 +298,7 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
     return s;
 
 fail:
+    free(acl);
     wn_ipc_server_close(s);
     return NULL;
 }
