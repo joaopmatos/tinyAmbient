@@ -278,4 +278,48 @@ foreach(round RANGE 1 5)
     expect_ok("quit ${round}")
 endforeach()
 
+# --- --foreground participates in the single-instance contract ---------------
+#
+# A second foreground start must fail on the address before it persists
+# anything: the running daemon would never see the saved setting.
+
+run_exe()
+expect_ok("start before the foreground checks")
+run_exe(--status)
+expect_status("daemon before the foreground checks" 1 brown 25 1)
+
+file(READ "${CFG}" config_before_foreground)
+run_exe(--foreground --volume 50)
+if(NOT TA_CODE EQUAL 3)
+    message(FATAL_ERROR
+        "ipc_check: --foreground against a daemon: exit ${TA_CODE}, expected 3")
+endif()
+if(NOT TA_ERR MATCHES "another daemon is already running")
+    message(FATAL_ERROR
+        "ipc_check: --foreground conflict message: ${TA_ERR}")
+endif()
+file(READ "${CFG}" config_after_foreground)
+if(NOT config_after_foreground STREQUAL config_before_foreground)
+    message(FATAL_ERROR
+        "ipc_check: --foreground conflict rewrote the configuration")
+endif()
+run_exe(--status)
+expect_status("daemon untouched by the conflict" 1 brown 25 1)
+
+# quit with --foreground reaches the running daemon; with none it is satisfied
+# without starting one.
+run_exe(--foreground --quit)
+expect_ok("foreground quit over IPC")
+if(EXISTS "${SOCKET}")
+    message(FATAL_ERROR "ipc_check: foreground quit left the socket behind")
+endif()
+wait_no_daemons("foreground quit")
+run_exe(--status)
+expect_status("status after the foreground quit" 0 brown 25 1)
+
+run_exe(--foreground --quit)
+expect_ok("foreground quit without a daemon")
+run_exe(--status)
+expect_status("status after the no-op foreground quit" 0 brown 25 1)
+
 message(STATUS "ipc_check: ok")

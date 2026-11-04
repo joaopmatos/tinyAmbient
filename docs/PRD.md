@@ -125,7 +125,7 @@ stop_after=off
 
 **FR-11 Portable mode.** `--portable` reads and writes `config.ini` next to the executable instead of the per-OS configuration directory.
 
-**FR-12 Foreground mode.** `--foreground` keeps the daemon attached to the terminal and logs lifecycle events to stderr. The process does not detach.
+**FR-12 Foreground mode.** `--foreground` keeps the daemon attached to the terminal and logs lifecycle events to stderr. The process does not detach. `quit` with `--foreground` acts on a running daemon exactly like plain `quit`, and is a no-op when none runs. A second foreground start while a daemon runs fails with exit `3` before writing configuration, so the saved file never describes state the running daemon does not have.
 
 **FR-13 Mono and stereo.** Default is independent per-channel generators. `--mono` generates one channel and duplicates it. `--stereo` restores the default. The choice persists.
 

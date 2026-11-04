@@ -488,10 +488,12 @@ precedence rules live in PRD section 7; do not duplicate them here.
   only checks whether a daemon already answers. If one does, the invocation is a
   no-op; otherwise it starts the daemon. `quit` with nothing running exits 0
   instead of starting a daemon just to stop it.
-- `--foreground` prepares the session exactly like the background path, then
-  opens the IPC socket without forking and runs `wn_platform_run` until SIGINT,
-  SIGTERM, or a forwarded `quit`. It therefore owns single-instance enforcement
-  too: a second daemon cannot start while it runs.
+- `--foreground` takes the single-instance address before anything else, so a
+  second foreground start fails with exit 3 instead of persisting settings the
+  running daemon never sees; `quit` is forwarded to a live daemon first, and is
+  a no-op when none runs. With the address owned, it prepares the session
+  exactly like the background path, then runs `wn_platform_run` without forking
+  until SIGINT, SIGTERM, or a forwarded `quit`.
 - The background path prepares the same state in the client before forking, so
   the daemon starts where a foreground run would: the setting commands are
   applied and saved once, the engine is created, the playback commands are

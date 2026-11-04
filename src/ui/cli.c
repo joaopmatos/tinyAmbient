@@ -472,33 +472,75 @@ static void fill_session(wn_session *session, const session_setup *setup,
     session->verbose = verbose;
 }
 
+/* --- Forwarded replies ----------------------------------------------------- */
+
+/* Declared here because the foreground path below forwards `quit` before those
+ * helpers are defined. */
+static int handle_reply(const char *reply);
+static int has_kind(const wn_cmd *cmds, int n, wn_cmd_kind kind);
+
 /* --foreground: run the session attached to this terminal (PRD FR-12). It also
  * owns the IPC socket, so forwarded commands work against a foreground daemon
- * exactly as they do against a detached one. */
+ * exactly as they do against a detached one.
+ *
+ * Ordering matters here, for two reasons the background path does not have:
+ *
+ * 1. quit is a command for a daemon, not a request to start one. With a live
+ *    daemon it must reach that daemon; with none it is already satisfied.
+ * 2. The single-instance address is taken before anything is persisted, so a
+ *    second foreground start fails with the conflict instead of writing
+ *    settings the running daemon never sees. */
 static int run_foreground(const wn_cmd *cmds, int n, int portable)
 {
     session_setup setup;
     wn_session session;
+    wn_ipc_server *ipc;
     wn_engine *engine;
     char err[160];
     int result;
 
+    if (has_kind(cmds, n, WN_CMD_QUIT)) {
+        char line[WN_LINE_MAX];
+        char reply[WN_IPC_REPLY_MAX];
+        size_t length = wn_cmd_format_ipc_line(cmds, n, line, sizeof(line));
+
+        if (length >= sizeof(line)) {
+            wn_cli_error("the command line is too long");
+            return WN_EXIT_USAGE;
+        }
+        if (length > 0) {
+            result = wn_platform_ipc_send(line, reply, sizeof(reply));
+            if (result == WN_IPC_OK) {
+                return handle_reply(reply);
+            }
+            if (result == WN_IPC_ERROR) {
+                wn_cli_error("cannot reach the daemon");
+                return WN_EXIT_IPC;
+            }
+        }
+        return WN_EXIT_OK;
+    }
+
+    ipc = wn_ipc_server_open(err, sizeof(err));
+    if (ipc == NULL) {
+        wn_cli_error(err);
+        return WN_EXIT_IPC;
+    }
+
     result = prepare_session(cmds, n, portable, &setup);
     if (result != WN_EXIT_OK) {
+        wn_ipc_server_close(ipc);
         return result;
     }
     if (setup.quit_only) {
+        /* Unreachable after the quit check above; kept as a guard. */
+        wn_ipc_server_close(ipc);
         return WN_EXIT_OK;
     }
     engine = setup.engine;
 
     fill_session(&session, &setup, portable, 1);
-    session.ipc = wn_ipc_server_open(err, sizeof(err));
-    if (session.ipc == NULL) {
-        wn_cli_error(err);
-        wn_engine_destroy(engine);
-        return WN_EXIT_IPC;
-    }
+    session.ipc = ipc;
 
     result = wn_platform_run(engine, &session);
     wn_engine_destroy(engine);
@@ -622,8 +664,6 @@ static int run_daemon_child(const wn_cmd *cmds, int n, int portable,
     return result != 0 ? WN_EXIT_RUNTIME : WN_EXIT_OK;
 }
 #endif
-
-/* --- Forwarded replies ----------------------------------------------------- */
 
 /* Prints a daemon reply and maps it to an exit code. `ok` is silent: setting
  * and playback commands produce no output (PRD FR-01, FR-06). An error reply
