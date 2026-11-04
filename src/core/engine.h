@@ -42,7 +42,11 @@ void wn_engine_set_opening_fade(wn_engine *e, unsigned ms);
 /* Applies one command line ("noise pink", "volume 40", "toggle"). Returns 0 on
  * success, non-zero for an unknown or invalid command. The line is copied, so
  * the caller's buffer is left untouched. Safe to call from the main thread
- * while the audio thread renders: only atomics are written. */
+ * while the audio thread renders: only atomics are written.
+ *
+ * The daemon parses forwarded lines itself and calls wn_engine_apply_cmd, so
+ * this text entry point is for tests and small embeddings; both end in the same
+ * apply path and the same validation rules. */
 int wn_engine_command(wn_engine *e, const char *line);
 
 /* Applies one already-parsed setting or playback command. Returns 0 on success,

@@ -98,6 +98,7 @@ typedef struct wn_engine wn_engine;
 wn_engine *wn_engine_create(const wn_config *cfg);
 void       wn_engine_destroy(wn_engine *e);
 int        wn_engine_command(wn_engine *e, const char *line);
+int        wn_engine_apply_cmd(wn_engine *e, const wn_cmd *cmd);
 void       wn_engine_render(wn_engine *e, float *out, unsigned frames);
 int        wn_engine_is_playing(const wn_engine *e);
 

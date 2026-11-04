@@ -455,6 +455,9 @@ void wn_engine_render(wn_engine *e, float *out, unsigned frames)
 
                 left = a + (b - a) * xfade_t;
                 if (is_mono) {
+                    /* One mix, duplicated. The right channel's generators do
+                     * not advance while mono is active, which only shifts
+                     * their RNG position, never the audible output. */
                     right = left;
                 } else {
                     a = wn_noise_next(&e->fade_gen[1]) * old_gain;
