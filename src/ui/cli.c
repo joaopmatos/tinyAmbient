@@ -541,34 +541,39 @@ static int run_background(const wn_cmd *cmds, int n, int portable, int argc,
 {
     session_setup setup;
     wn_session session;
+    wn_ipc_server *ipc = NULL;
     wn_engine *engine;
     char err[160];
     intptr_t ready_fd = -1;
     int result;
 
+#if !defined(_WIN32)
+    /* The forking parent takes the socket and the lock before the fork, so the
+     * address is owned from the moment the client gives up, and before anything
+     * is persisted: a race with another start must fail on the lock instead of
+     * saving settings no session applied. Windows cannot inherit this process's
+     * handles into a detached copy that way, so its child creates the pipe
+     * itself. */
+    ipc = wn_ipc_server_open(err, sizeof(err));
+    if (ipc == NULL) {
+        wn_cli_error(err);
+        return WN_EXIT_IPC;
+    }
+#endif
+
     result = prepare_session(cmds, n, portable, &setup);
     if (result != WN_EXIT_OK) {
+        wn_ipc_server_close(ipc);
         return result;
     }
     if (setup.quit_only) {
+        wn_ipc_server_close(ipc);
         return WN_EXIT_OK;
     }
     engine = setup.engine;
 
     fill_session(&session, &setup, portable, 0);
-
-#if !defined(_WIN32)
-    /* The forking parent takes the socket and the lock before the fork, so the
-     * address is owned from the moment the client gives up. Windows cannot
-     * inherit this process's handles into a fresh process that way, so its
-     * daemon creates the pipe itself. */
-    session.ipc = wn_ipc_server_open(err, sizeof(err));
-    if (session.ipc == NULL) {
-        wn_cli_error(err);
-        wn_engine_destroy(engine);
-        return WN_EXIT_IPC;
-    }
-#endif
+    session.ipc = ipc;
 
     result = wn_platform_detach(argc, argv, &ready_fd, err, sizeof(err));
     if (result == WN_DETACH_ERROR) {

@@ -519,8 +519,11 @@ precedence rules live in PRD section 7; do not duplicate them here.
 - The background path prepares the same state in the client before forking, so
   the daemon starts where a foreground run would: the setting commands are
   applied and saved once, the engine is created, the playback commands are
-  applied, and the timer is armed. The parent waits for the readiness byte, so a
-  first start with no audio device still exits 1 with a message.
+  applied, and the timer is armed. On POSIX it takes the IPC address before
+  preparing, for the same reason as `--foreground`: a lost race with another
+  start must fail on the lock, not leave settings on disk that no session
+  applied. The parent waits for the readiness byte, so a first start with no
+  audio device still exits 1 with a message.
 - Windows cannot fork, so the same preparation runs twice: once in the parent
   (which then exits) and once in the detached child, which re-parses the
   original arguments behind `--daemon-child`. The repetition is safe because
