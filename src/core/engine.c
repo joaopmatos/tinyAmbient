@@ -52,8 +52,9 @@ struct wn_engine {
     _Atomic int mono;
 
     /* --- main thread requests, audio thread consumes -------------------- */
-    _Atomic int fade_in_req; /* 1: restart the envelope from silence */
-    _Atomic int fade_out_ms; /* >0: fade to silence over N ms, then pause */
+    _Atomic int fade_in_req;     /* 1: restart the envelope from silence */
+    _Atomic int fade_out_ms;     /* >0: fade to silence over N ms, then pause */
+    _Atomic int stop_cancel_req; /* 1: the user resumed during the stop fade */
 
     /* --- audio thread writes, any thread reads (diagnostics) ------------ */
     _Atomic unsigned long frames_rendered;
@@ -122,6 +123,7 @@ wn_engine *wn_engine_create(const wn_config *cfg)
     atomic_store_explicit(&e->mono, cfg->mono != 0, memory_order_relaxed);
     atomic_store_explicit(&e->fade_in_req, 0, memory_order_relaxed);
     atomic_store_explicit(&e->fade_out_ms, 0, memory_order_relaxed);
+    atomic_store_explicit(&e->stop_cancel_req, 0, memory_order_relaxed);
     atomic_store_explicit(&e->frames_rendered, 0, memory_order_relaxed);
 
     /* One generator per channel, decorrelated by PCG32 stream rather than by
@@ -216,6 +218,9 @@ static void apply_command(wn_engine *e, const wn_cmd *cmd)
             break;
         case WN_CMD_PLAY:
             atomic_store_explicit(&e->playing, 1, memory_order_relaxed);
+            /* A resume during a stop fade is the user still working: the
+             * audio thread cancels the pending pause at the next buffer. */
+            atomic_store_explicit(&e->stop_cancel_req, 1, memory_order_relaxed);
             break;
         case WN_CMD_PAUSE:
             atomic_store_explicit(&e->playing, 0, memory_order_relaxed);
@@ -225,6 +230,9 @@ static void apply_command(wn_engine *e, const wn_cmd *cmd)
                 &e->playing,
                 !atomic_load_explicit(&e->playing, memory_order_relaxed),
                 memory_order_relaxed);
+            /* The cancel path fades to whatever `playing` now targets, so a
+             * toggle-to-pause behaves exactly like the volume-change cancel. */
+            atomic_store_explicit(&e->stop_cancel_req, 1, memory_order_relaxed);
             break;
         case WN_CMD_MONO:
             atomic_store_explicit(&e->mono, 1, memory_order_relaxed);
@@ -323,6 +331,7 @@ void wn_engine_render(wn_engine *e, float *out, unsigned frames)
     int target_milli;
     int fade_in;
     int stop_ms;
+    int stop_cancel;
     int ch;
 
     if (e == NULL || out == NULL) {
@@ -343,6 +352,8 @@ void wn_engine_render(wn_engine *e, float *out, unsigned frames)
         atomic_exchange_explicit(&e->fade_in_req, 0, memory_order_relaxed);
     stop_ms =
         atomic_exchange_explicit(&e->fade_out_ms, 0, memory_order_relaxed);
+    stop_cancel =
+        atomic_exchange_explicit(&e->stop_cancel_req, 0, memory_order_relaxed);
 
     if (fade_in) {
         e->gain = 0.0f;
@@ -354,8 +365,10 @@ void wn_engine_render(wn_engine *e, float *out, unsigned frames)
         e->stopping = 1;
     } else if (e->stopping) {
         /* A playing or volume change during the stop fade means the user is
-         * still working, so the pause is cancelled. */
-        if (target_milli != e->stop_target_milli) {
+         * still working, so the pause is cancelled. Expiry is authoritative
+         * when both land in the same buffer: the branch above wins and this
+         * one is not reached. */
+        if (stop_cancel || target_milli != e->stop_target_milli) {
             start_gain_fade(e, target_milli, WN_FADE_FRAMES);
             e->stopping = 0;
         }

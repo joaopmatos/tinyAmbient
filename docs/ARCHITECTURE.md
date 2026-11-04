@@ -21,7 +21,7 @@ No UI thread in v1. No locks between the two: all communication goes through ato
 | `playing` | main | audio |
 | `volume_milli` | main | audio |
 | `mono` | main | audio |
-| `fade_in_req`, `fade_out_ms` | main | audio (consumed with an exchange) |
+| `fade_in_req`, `fade_out_ms`, `stop_cancel_req` | main | audio (consumed with an exchange) |
 | `stop_at_ms` (monotonic) | main | main |
 | filter phases, RNG state, fade envelopes | audio | audio |
 | config on disk | main | main |
@@ -190,9 +190,11 @@ Cross-thread state (AGENTS.md 1.2), all `_Atomic int` and read once per buffer:
   needed. The value is always a multiple of ten, so the 0..100 reading is exact.
 - `mono` — a parameter like the others; a plain `int` shared with the audio
   thread would be a data race.
-- `fade_in_req` / `fade_out_ms` — one-shot requests the audio thread consumes
-  with an atomic exchange. `wn_engine_fade_in` is the device-resume path
-  (FR-16); `wn_engine_fade_out` is the session timer's expiry (FR-05).
+- `fade_in_req` / `fade_out_ms` / `stop_cancel_req` — one-shot requests the audio
+  thread consumes with an atomic exchange. `wn_engine_fade_in` is the
+  device-resume path (FR-16); `wn_engine_fade_out` is the session timer's expiry
+  (FR-05); `stop_cancel_req` is set by `play`/`toggle` so a resume cancels a
+  pending auto-pause even though the envelope target has not changed.
 
 Audio-thread-only state: two `wn_noise` generators (left/right), a second pair
 that holds the outgoing noise during a crossfade, and two independent,
@@ -211,8 +213,11 @@ piecewise-linear progressions:
    never calls it, so offline output keeps the 20 ms fade and stays identical.
    A stop fade is the same envelope with a long duration; when it lands the
    audio thread stores `playing = 0`, so the daemon observes the pause without
-   inspecting the envelope. A playing/volume change during the stop fade cancels
-   it: the target changed, which means the user is still working.
+   inspecting the envelope. A playing or volume change during the stop fade
+   cancels it: `play` and `toggle` raise the one-shot `stop_cancel_req`, and a
+   target change is detected directly, because either means the user is still
+   working. Expiry is authoritative when both land in the same buffer: the
+   fade-out request is consumed first, so the session still pauses.
 2. **Noise crossfade.** On a type change the audio thread copies the current
    generators to `fade_gen`, then calls `wn_noise_set_type` on the live ones
    (filters reset, RNG preserved). The copy continues the old sequence from

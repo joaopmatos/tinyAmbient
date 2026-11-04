@@ -473,6 +473,67 @@ static void test_stop_fade_cancelled_by_a_change(void)
     wn_engine_destroy(engine);
 }
 
+static void test_stop_fade_cancelled_by_play(void)
+{
+    float buffer[FRAMES * WN_CHANNELS];
+    float steady[FRAMES * WN_CHANNELS];
+    wn_engine *engine = make_engine(WN_NOISE_WHITE, 100, 0, 0);
+    int block;
+
+    CHECK(engine != NULL);
+    if (engine == NULL) {
+        return;
+    }
+
+    settle(engine, steady);
+
+    /* One `play` during the fade is enough: the user resumed, so the pending
+     * pause is cancelled even though `playing` was already 1 and the target
+     * therefore never changed (ARCHITECTURE 12). */
+    wn_engine_fade_out(engine, 200);
+    RENDER(engine, buffer);
+    CHECK(wn_engine_command(engine, "play") == 0);
+
+    for (block = 0; block < 12; block++) {
+        RENDER(engine, buffer);
+    }
+
+    CHECK(wn_engine_is_playing(engine));
+    CHECK(buffer_has_signal(buffer, FRAMES));
+    /* The envelope returned to the requested level, not to a residual. */
+    CHECK(rms(buffer, FRAMES) > 0.8 * rms(steady, FRAMES));
+
+    wn_engine_destroy(engine);
+}
+
+static void test_stop_fade_expiry_beats_a_play(void)
+{
+    float buffer[FRAMES * WN_CHANNELS];
+    wn_engine *engine = make_engine(WN_NOISE_WHITE, 100, 0, 0);
+    int block;
+
+    CHECK(engine != NULL);
+    if (engine == NULL) {
+        return;
+    }
+
+    settle(engine, buffer);
+
+    /* A resume that reaches the engine in the same buffer as the expiry loses:
+     * the timer is authoritative, so the session still pauses. */
+    CHECK(wn_engine_command(engine, "play") == 0);
+    wn_engine_fade_out(engine, 50);
+
+    for (block = 0; block < 4; block++) {
+        RENDER(engine, buffer);
+    }
+
+    CHECK(!wn_engine_is_playing(engine));
+    CHECK(buffer_is_silent(buffer, FRAMES));
+
+    wn_engine_destroy(engine);
+}
+
 static void test_device_restart_fades_in(void)
 {
     float buffer[FRAMES * WN_CHANNELS];
@@ -622,6 +683,8 @@ int main(void)
     test_second_switch_waits_for_the_first();
     test_stop_fade_pauses();
     test_stop_fade_cancelled_by_a_change();
+    test_stop_fade_cancelled_by_play();
+    test_stop_fade_expiry_beats_a_play();
     test_device_restart_fades_in();
     test_mono_switch_mid_stream();
     test_commands_update_state();

@@ -27,7 +27,7 @@ If the PRD and this file disagree, the PRD wins and this file is fixed in the sa
 ## 1. Hard constraints
 
 1. The audio callback does not allocate, block, log, or perform I/O.
-2. Parameters cross the thread boundary through integer atomics: `_Atomic int` for type, playing, volume_milli, and mono, plus the one-shot fade requests (`fade_in_req`, `fade_out_ms`). `volume_milli` avoids `_Atomic float`. The stop-after deadline is main-thread state and needs no atomic.
+2. Parameters cross the thread boundary through integer atomics: `_Atomic int` for type, playing, volume_milli, and mono, plus the one-shot requests (`fade_in_req`, `fade_out_ms`, `stop_cancel_req`). `volume_milli` avoids `_Atomic float`. The stop-after deadline is main-thread state and needs no atomic.
 3. `core/` includes only `libc`, `libm`, and C11 headers (`stdint`, `stdbool`, `stddef`, `stdatomic`). No OS headers.
 4. Allowed external dependencies: libc/libm; ALSA and Pulse loaded with `dlopen`; a pinned, vendored miniaudio. Anything else needs written justification and a measured size delta.
 5. `miniaudio` is not upgraded without testing audio and measuring the binary.

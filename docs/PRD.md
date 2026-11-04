@@ -100,7 +100,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 
 **FR-04 Noise switching.** Changing type crossfades over `fade_ms` (default 250). No discontinuity, no clipping, no gap.
 
-**FR-05 Session auto-stop.** `--stop-after <minutes>` starts a countdown from the moment the command is applied; minutes are an integer from 1 to 10080 (one week). `--stop-after off` cancels it. At expiry, playback fades out over 20 s and pauses; the daemon stays alive. The timer bounds a work session; it is session state and is never written to configuration.
+**FR-05 Session auto-stop.** `--stop-after <minutes>` starts a countdown from the moment the command is applied; minutes are an integer from 1 to 10080 (one week). `--stop-after off` cancels it. At expiry, playback fades out over 20 s and pauses; the daemon stays alive. `play`, `toggle`, or a volume change during the fade cancels the pause; a resume that reaches the engine in the same buffer as the expiry loses, because the timer is authoritative. The timer bounds a work session; it is session state and is never written to configuration.
 
 **FR-06 Config persistence.** Commands that change a persisted setting (`noise`, `volume`, `mono`, `stereo`) apply to the daemon and write configuration. Playback commands (`play`, `pause`, `toggle`) and `stop-after` change session state only and never write. Writes are atomic: temporary file in the target directory, `fsync`, `rename`. `--status`, `--render`, `--help`, and `--version` never write.
 
