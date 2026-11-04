@@ -49,6 +49,7 @@ src/
     config.c config.h    # INI parse/format, no I/O
     command.c command.h  # single parser for argv and IPC
     status.c status.h    # the six-line status formatter
+    text.c text.h        # case-folding and bounded message formatting
   audio/
     device.c             # only file that includes miniaudio
   platform/

@@ -7,7 +7,6 @@
 #include "platform/config_file.h"
 
 #include <errno.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,20 +19,8 @@
 #endif
 
 #include "core/config.h"
+#include "core/text.h"
 #include "platform/paths.h"
-
-static void set_message(char *err, size_t cap, const char *fmt, ...)
-{
-    va_list args;
-
-    if (err == NULL || cap == 0) {
-        return;
-    }
-
-    va_start(args, fmt);
-    (void)vsnprintf(err, cap, fmt, args);
-    va_end(args);
-}
 
 int wn_config_file_load(const char *path, wn_config *cfg, char *text,
                         size_t text_cap, size_t *text_len, char *warn,
@@ -62,7 +49,7 @@ int wn_config_file_load(const char *path, wn_config *cfg, char *text,
             /* First run: defaults are the configuration. */
             return 0;
         }
-        set_message(warn, warn_cap, "cannot read '%s'", path);
+        wn_text_set(warn, warn_cap, "cannot read '%s'", path);
         return -1;
     }
 
@@ -77,7 +64,7 @@ int wn_config_file_load(const char *path, wn_config *cfg, char *text,
 
     if (ferror(file) != 0) {
         (void)fclose(file);
-        set_message(warn, warn_cap, "cannot read '%s'", path);
+        wn_text_set(warn, warn_cap, "cannot read '%s'", path);
         return -1;
     }
 
@@ -89,7 +76,7 @@ int wn_config_file_load(const char *path, wn_config *cfg, char *text,
         }
         if (ferror(file) != 0) {
             (void)fclose(file);
-            set_message(warn, warn_cap, "cannot read '%s'", path);
+            wn_text_set(warn, warn_cap, "cannot read '%s'", path);
             return -1;
         }
     }
@@ -101,7 +88,7 @@ int wn_config_file_load(const char *path, wn_config *cfg, char *text,
     }
 
     if (too_long) {
-        set_message(warn, warn_cap,
+        wn_text_set(warn, warn_cap,
                     "configuration file is too large; extra bytes ignored");
     }
     wn_config_parse(text, used, cfg, warn, warn_cap);
@@ -207,13 +194,13 @@ int wn_config_file_save(const char *path, const wn_config *cfg,
     size_t needed;
 
     if (path == NULL || cfg == NULL) {
-        set_message(err, err_cap, "internal: no configuration to write");
+        wn_text_set(err, err_cap, "internal: no configuration to write");
         return -1;
     }
 
     needed = wn_config_format(cfg, original, NULL, 0);
     if (needed >= sizeof(text)) {
-        set_message(err, err_cap, "configuration is too large to write");
+        wn_text_set(err, err_cap, "configuration is too large to write");
         return -1;
     }
     (void)wn_config_format(cfg, original, text, sizeof(text));
@@ -224,10 +211,10 @@ int wn_config_file_save(const char *path, const wn_config *cfg,
 
     if (atomic_write(path, text, needed) != 0) {
         if (portable) {
-            set_message(err, err_cap,
+            wn_text_set(err, err_cap,
                         "cannot write config.ini next to the executable");
         } else {
-            set_message(err, err_cap, "cannot write the configuration file");
+            wn_text_set(err, err_cap, "cannot write the configuration file");
         }
         return -1;
     }

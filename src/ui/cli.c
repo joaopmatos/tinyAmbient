@@ -9,6 +9,7 @@
 #include "core/engine.h"
 #include "core/noise.h"
 #include "core/status.h"
+#include "core/text.h"
 #include "platform/config_file.h"
 #include "platform/paths.h"
 #include "platform/platform.h"
@@ -66,27 +67,6 @@ void wn_cli_usage(void)
           stdout);
 }
 
-static int ascii_equal_ci(const char *a, const char *b)
-{
-    for (;;) {
-        unsigned char ca = (unsigned char)*a++;
-        unsigned char cb = (unsigned char)*b++;
-
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = (unsigned char)(ca - 'A' + 'a');
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = (unsigned char)(cb - 'A' + 'a');
-        }
-        if (ca != cb) {
-            return 0;
-        }
-        if (ca == '\0') {
-            return 1;
-        }
-    }
-}
-
 static int has_wav_extension(const char *path)
 {
     size_t len;
@@ -98,7 +78,7 @@ static int has_wav_extension(const char *path)
     if (len < 4) {
         return 0;
     }
-    return ascii_equal_ci(path + len - 4, ".wav");
+    return wn_text_equal_ci(path + len - 4, ".wav");
 }
 
 /* --- WAV container --------------------------------------------------------

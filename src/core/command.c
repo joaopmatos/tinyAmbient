@@ -1,11 +1,11 @@
 #include "core/command.h"
 
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "core/noise.h"
+#include "core/text.h"
 
 /* One command line is at most WN_LINE_MAX bytes; the worst case is every
  * command carrying a value, so two tokens per command is enough. */
@@ -14,42 +14,6 @@
 static int arg_is(const char *arg, const char *name)
 {
     return strcmp(arg, name) == 0;
-}
-
-static void set_error(char *err, size_t cap, const char *fmt, ...)
-{
-    va_list args;
-
-    if (err == NULL || cap == 0) {
-        return;
-    }
-
-    va_start(args, fmt);
-    (void)vsnprintf(err, cap, fmt, args);
-    va_end(args);
-}
-
-/* Case-insensitive compare without <strings.h>: strcasecmp is POSIX, not C11,
- * and core/ is restricted to the C11 standard library. */
-static int ascii_equal_ci(const char *a, const char *b)
-{
-    for (;;) {
-        unsigned char ca = (unsigned char)*a++;
-        unsigned char cb = (unsigned char)*b++;
-
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = (unsigned char)(ca - 'A' + 'a');
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = (unsigned char)(cb - 'A' + 'a');
-        }
-        if (ca != cb) {
-            return 0;
-        }
-        if (ca == '\0') {
-            return 1;
-        }
-    }
 }
 
 /* Parses a decimal integer in [lo, hi]. Rejects trailing garbage, empty
@@ -79,7 +43,7 @@ static int emit(wn_cmd *out, int cap, int *count, wn_cmd_kind kind, int ivalue,
                 const char *svalue, char *err, size_t err_cap)
 {
     if (*count >= cap) {
-        set_error(err, err_cap, "too many arguments");
+        wn_text_set(err, err_cap, "too many arguments");
         return -1;
     }
 
@@ -115,16 +79,16 @@ static int validate(const wn_cmd *cmds, int count, char *err, size_t err_cap)
                 kind != WN_CMD_VOLUME && kind != WN_CMD_MONO &&
                 kind != WN_CMD_STEREO && kind != WN_CMD_HELP &&
                 kind != WN_CMD_VERSION) {
-                set_error(err, err_cap,
-                          "--render cannot be combined with other commands");
+                wn_text_set(err, err_cap,
+                            "--render cannot be combined with other commands");
                 return -1;
             }
         }
     } else {
         for (i = 0; i < count; i++) {
             if (cmds[i].kind == WN_CMD_SECONDS || cmds[i].kind == WN_CMD_SEED) {
-                set_error(err, err_cap,
-                          "--seconds and --seed require --render");
+                wn_text_set(err, err_cap,
+                            "--seconds and --seed require --render");
                 return -1;
             }
         }
@@ -143,8 +107,8 @@ static int validate(const wn_cmd *cmds, int count, char *err, size_t err_cap)
                 kind == WN_CMD_MONO || kind == WN_CMD_STEREO ||
                 kind == WN_CMD_FOREGROUND || kind == WN_CMD_QUIT ||
                 kind == WN_CMD_RENDER) {
-                set_error(err, err_cap,
-                          "--status cannot be combined with other commands");
+                wn_text_set(err, err_cap,
+                            "--status cannot be combined with other commands");
                 return -1;
             }
         }
@@ -168,7 +132,7 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
     int i = 0;
 
     if (out == NULL || cap <= 0) {
-        set_error(err, err_cap, "internal: no command buffer");
+        wn_text_set(err, err_cap, "internal: no command buffer");
         return -1;
     }
 
@@ -178,13 +142,13 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
         const char *value = NULL;
 
         if (arg == NULL || arg[0] == '\0') {
-            set_error(err, err_cap, "empty command");
+            wn_text_set(err, err_cap, "empty command");
             return -1;
         }
 
         if (arg[0] == '-') {
             if (arg[1] != '-') {
-                set_error(err, err_cap, "unknown option '%s'", arg);
+                wn_text_set(err, err_cap, "unknown option '%s'", arg);
                 return -1;
             }
             if (arg[2] == '\0') {
@@ -192,8 +156,8 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
                  * arguments, so anything after it is an error rather than
                  * silently ignored. */
                 if (i + 1 < count) {
-                    set_error(err, err_cap, "unexpected argument '%s'",
-                              tok[i + 1]);
+                    wn_text_set(err, err_cap, "unexpected argument '%s'",
+                                tok[i + 1]);
                     return -1;
                 }
                 break;
@@ -203,11 +167,11 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
 
         if (arg_is(name, "render")) {
             if (i + 1 >= count) {
-                set_error(err, err_cap, "'%s' requires a path", arg);
+                wn_text_set(err, err_cap, "'%s' requires a path", arg);
                 return -1;
             }
             if (seen_render) {
-                set_error(err, err_cap, "'%s' given more than once", arg);
+                wn_text_set(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_render = 1;
@@ -217,7 +181,8 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
                  * through its range check. Render is the only free-form one,
                  * so the check is spelled out; without it, `--render --help`
                  * silently writes a file named "--help". */
-                set_error(err, err_cap, "a render path may not start with '-'");
+                wn_text_set(err, err_cap,
+                            "a render path may not start with '-'");
                 return -1;
             }
             if (emit(out, cap, &n, WN_CMD_RENDER, 0, value, err, err_cap) !=
@@ -229,20 +194,20 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
             int type;
 
             if (i + 1 >= count) {
-                set_error(err, err_cap, "'%s' requires a value", arg);
+                wn_text_set(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_noise) {
-                set_error(err, err_cap, "'%s' given more than once", arg);
+                wn_text_set(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_noise = 1;
             value = tok[i + 1];
             type = wn_noise_type_parse(value);
             if (type == WN_NOISE_NONE) {
-                set_error(err, err_cap,
-                          "'%s' is not a noise type (white, pink, brown)",
-                          value);
+                wn_text_set(err, err_cap,
+                            "'%s' is not a noise type (white, pink, brown)",
+                            value);
                 return -1;
             }
             if (emit(out, cap, &n, WN_CMD_NOISE, type, wn_noise_type_name(type),
@@ -254,18 +219,18 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
             int volume;
 
             if (i + 1 >= count) {
-                set_error(err, err_cap, "'%s' requires a value", arg);
+                wn_text_set(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_volume) {
-                set_error(err, err_cap, "'%s' given more than once", arg);
+                wn_text_set(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_volume = 1;
             value = tok[i + 1];
             if (parse_int(value, 0, 100, &volume) != 0) {
-                set_error(err, err_cap, "'%s' is not a valid volume (0-100)",
-                          value);
+                wn_text_set(err, err_cap, "'%s' is not a valid volume (0-100)",
+                            value);
                 return -1;
             }
             if (emit(out, cap, &n, WN_CMD_VOLUME, volume, NULL, err, err_cap) !=
@@ -277,21 +242,22 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
             int minutes = WN_STOP_AFTER_OFF;
 
             if (i + 1 >= count) {
-                set_error(err, err_cap, "'%s' requires a value", arg);
+                wn_text_set(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_stop_after) {
-                set_error(err, err_cap, "'%s' given more than once", arg);
+                wn_text_set(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_stop_after = 1;
             value = tok[i + 1];
-            if (!ascii_equal_ci(value, "off") &&
+            if (!wn_text_equal_ci(value, "off") &&
                 parse_int(value, WN_STOP_AFTER_MIN, WN_STOP_AFTER_MAX,
                           &minutes) != 0) {
-                set_error(err, err_cap,
-                          "'%s' is not a valid stop-after value (1-%d or off)",
-                          value, WN_STOP_AFTER_MAX);
+                wn_text_set(
+                    err, err_cap,
+                    "'%s' is not a valid stop-after value (1-%d or off)", value,
+                    WN_STOP_AFTER_MAX);
                 return -1;
             }
             if (emit(out, cap, &n, WN_CMD_STOP_AFTER, minutes, NULL, err,
@@ -303,20 +269,20 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
             int seconds;
 
             if (i + 1 >= count) {
-                set_error(err, err_cap, "'%s' requires a value", arg);
+                wn_text_set(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_seconds) {
-                set_error(err, err_cap, "'%s' given more than once", arg);
+                wn_text_set(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_seconds = 1;
             value = tok[i + 1];
             if (parse_int(value, WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX,
                           &seconds) != 0) {
-                set_error(err, err_cap,
-                          "'%s' is not a valid seconds value (%d-%d)", value,
-                          WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX);
+                wn_text_set(err, err_cap,
+                            "'%s' is not a valid seconds value (%d-%d)", value,
+                            WN_RENDER_SECONDS_MIN, WN_RENDER_SECONDS_MAX);
                 return -1;
             }
             if (emit(out, cap, &n, WN_CMD_SECONDS, seconds, NULL, err,
@@ -328,19 +294,19 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
             int seed;
 
             if (i + 1 >= count) {
-                set_error(err, err_cap, "'%s' requires a value", arg);
+                wn_text_set(err, err_cap, "'%s' requires a value", arg);
                 return -1;
             }
             if (seen_seed) {
-                set_error(err, err_cap, "'%s' given more than once", arg);
+                wn_text_set(err, err_cap, "'%s' given more than once", arg);
                 return -1;
             }
             seen_seed = 1;
             value = tok[i + 1];
             if (parse_int(value, 0, 2147483647L, &seed) != 0) {
-                set_error(err, err_cap,
-                          "'%s' is not a valid seed value (0-2147483647)",
-                          value);
+                wn_text_set(err, err_cap,
+                            "'%s' is not a valid seed value (0-2147483647)",
+                            value);
                 return -1;
             }
             if (emit(out, cap, &n, WN_CMD_SEED, seed, NULL, err, err_cap) !=
@@ -408,9 +374,9 @@ static int parse_tokens(const char *const *tok, int count, wn_cmd *out, int cap,
             i++;
         } else {
             if (arg[0] == '-') {
-                set_error(err, err_cap, "unknown option '%s'", arg);
+                wn_text_set(err, err_cap, "unknown option '%s'", arg);
             } else {
-                set_error(err, err_cap, "unknown command '%s'", arg);
+                wn_text_set(err, err_cap, "unknown command '%s'", arg);
             }
             return -1;
         }
@@ -449,11 +415,11 @@ int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
     char *p;
 
     if (line == NULL) {
-        set_error(err, err_cap, "empty command");
+        wn_text_set(err, err_cap, "empty command");
         return -1;
     }
     if (strlen(line) >= WN_LINE_MAX) {
-        set_error(err, err_cap, "command line is too long");
+        wn_text_set(err, err_cap, "command line is too long");
         return -1;
     }
 
@@ -466,7 +432,7 @@ int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
             break;
         }
         if (count >= WN_TOKEN_MAX) {
-            set_error(err, err_cap, "too many arguments");
+            wn_text_set(err, err_cap, "too many arguments");
             return -1;
         }
 
@@ -482,7 +448,7 @@ int wn_cmd_parse_line(char *line, wn_cmd *out, int cap, char *err,
     }
 
     if (count == 0) {
-        set_error(err, err_cap, "empty command");
+        wn_text_set(err, err_cap, "empty command");
         return -1;
     }
 

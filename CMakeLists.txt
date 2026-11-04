@@ -120,7 +120,8 @@ add_library(ta_core STATIC
     src/core/engine.c
     src/core/command.c
     src/core/config.c
-    src/core/status.c)
+    src/core/status.c
+    src/core/text.c)
 target_include_directories(ta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # PUBLIC so the daemon, the client, and --version report one version string
 # (PRD FR-15). core/status.c formats it without touching any OS API.

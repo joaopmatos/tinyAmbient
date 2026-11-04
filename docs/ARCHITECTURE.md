@@ -265,6 +265,16 @@ no-daemon fallback in `ui/cli.c` both call it, so the two forms cannot drift.
 The version string comes from `TA_VERSION`, defined `PUBLIC` on `ta_core` by
 CMake so the daemon reports the same value as `--version`.
 
+### `core/text.c`
+
+Two helpers every layer uses on command text: `wn_text_equal_ci` (ASCII-only
+case folding, so a locale cannot change how a noise name or a `.wav` extension
+compares) and `wn_text_set`/`wn_text_vset` (bounded `vsnprintf` into a caller
+buffer). They live in `core/` because `ui/` may depend on `core/` but not the
+reverse, and they exist so the parser, the config reader, and the CLI cannot
+grow three subtly different copies of the same comparison or the same
+message-formatting guard.
+
 ---
 
 ## 6. `audio/device.c`

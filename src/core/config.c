@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "core/noise.h"
+#include "core/text.h"
 
 /* A view into a line. No copying: the parser only needs lengths. */
 typedef struct {
@@ -52,6 +53,8 @@ static void trim(slice *s)
     }
 }
 
+/* Keeps the first warning only: the parser reports the first problem a user
+ * should fix, and later lines would hide it. */
 static void set_warning(char *warn, size_t cap, const char *fmt, ...)
 {
     va_list args;
@@ -61,7 +64,7 @@ static void set_warning(char *warn, size_t cap, const char *fmt, ...)
     }
 
     va_start(args, fmt);
-    (void)vsnprintf(warn, cap, fmt, args);
+    wn_text_vset(warn, cap, fmt, args);
     va_end(args);
 }
 
