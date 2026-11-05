@@ -61,9 +61,19 @@ int wn_platform_run(wn_engine *e, wn_session *s);
  * handler. */
 void wn_platform_request_quit(void);
 
+/* Reports readiness (or a start failure) on s->ready_fd, exactly as the run
+ * loop does. A daemon child that lost the address race uses it to tell its
+ * waiting parent that a forwarded command was delivered instead of a new
+ * daemon starting. */
+void wn_platform_notify_ready(wn_session *s, int ok);
+
 /* Client side of IPC: sends one command line and stores the reply. Returns
  * WN_IPC_OK, WN_IPC_ABSENT (no daemon), or WN_IPC_ERROR. */
 int wn_platform_ipc_send(const char *line, char *reply, size_t cap);
+
+/* Like wn_platform_ipc_send, but retries briefly when no daemon answers, for
+ * the window in which a competing daemon is still starting. */
+int wn_platform_ipc_send_wait(const char *line, char *reply, size_t cap);
 
 /* Detaches the current process into a background daemon.
  *

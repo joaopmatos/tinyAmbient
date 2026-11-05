@@ -115,8 +115,10 @@ static void log_event(const wn_session *s, const char *text)
 /* Tells the process that started us whether the daemon came up. POSIX uses a
  * pipe: 0 is ready, 1 is a failed device start, and EOF means the child died
  * first. Windows uses an inherited manual-reset event, where signaled means
- * ready and the parent watches the process handle for failure. */
-static void notify_ready(wn_session *s, int ok)
+ * ready and the parent watches the process handle for failure. Exposed as
+ * wn_platform_notify_ready so a child that lost the address race can report
+ * success to its parent after forwarding instead of starting a daemon. */
+void wn_platform_notify_ready(wn_session *s, int ok)
 {
     if (s->ready_fd == -1) {
         return;
@@ -340,14 +342,14 @@ int wn_platform_run(wn_engine *e, wn_session *s)
     /* A device missing at startup is a hard failure with a clear message; a
      * device lost later is retried forever below (FR-16). */
     if (wn_audio_start(e) != 0) {
-        notify_ready(s, 0);
+        wn_platform_notify_ready(s, 0);
         if (s->ipc != NULL) {
             wn_ipc_server_close(s->ipc);
             s->ipc = NULL;
         }
         return -1;
     }
-    notify_ready(s, 1);
+    wn_platform_notify_ready(s, 1);
     log_event(s, "audio device started");
 
     if (s->stop_after_ms > 0) {
@@ -429,6 +431,11 @@ int wn_platform_run(wn_engine *e, wn_session *s)
 int wn_platform_ipc_send(const char *line, char *reply, size_t cap)
 {
     return wn_ipc_client_send(line, reply, cap);
+}
+
+int wn_platform_ipc_send_wait(const char *line, char *reply, size_t cap)
+{
+    return wn_ipc_client_send_wait(line, reply, cap);
 }
 
 int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,

@@ -29,9 +29,16 @@ typedef struct wn_ipc_server wn_ipc_server;
  * `reply`, NUL-terminated. Returns WN_IPC_OK, WN_IPC_ABSENT, or WN_IPC_ERROR. */
 int wn_ipc_client_send(const char *line, char *reply, size_t cap);
 
+/* Like wn_ipc_client_send, but retries for a short window when no daemon
+ * answers. Used after losing the single-instance address race, where the
+ * competing daemon may still be finishing startup. Returns the same codes. */
+int wn_ipc_client_send_wait(const char *line, char *reply, size_t cap);
+
 /* Opens the single-instance address. Returns NULL on failure with a message in
- * `err`. The caller owns the handle until wn_ipc_server_close. */
-wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap);
+ * `err`; `*conflict` (optional) is set to 1 when the failure is specifically
+ * that another daemon already owns the address. The caller owns the handle
+ * until wn_ipc_server_close. */
+wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap, int *conflict);
 
 /* Waits up to `timeout_ms` for one client line. Returns 1 with `line` filled,
  * 0 on timeout, -1 on error. A ready client stays open for exactly one reply or

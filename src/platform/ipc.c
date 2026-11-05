@@ -221,6 +221,24 @@ int wn_ipc_client_send(const char *line, char *reply, size_t cap)
     return WN_IPC_ABSENT;
 }
 
+int wn_ipc_client_send_wait(const char *line, char *reply, size_t cap)
+{
+    int attempt;
+
+    for (attempt = 0; attempt < 10; attempt++) {
+        int result = wn_ipc_client_send(line, reply, cap);
+
+        if (result != WN_IPC_ABSENT) {
+            return result;
+        }
+        if (attempt < 9) {
+            Sleep(25);
+        }
+    }
+
+    return WN_IPC_ABSENT;
+}
+
 /* Builds the SECURITY_ATTRIBUTES that restrict the pipe to the current user.
  * The ACL is sized from the real SID: domain and Entra accounts can carry more
  * subauthorities than a fixed buffer would hold, and a too-small buffer fails
@@ -265,7 +283,7 @@ static int build_security(SECURITY_ATTRIBUTES *sa, SECURITY_DESCRIPTOR *sd,
     return result;
 }
 
-wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
+wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap, int *conflict)
 {
     SECURITY_ATTRIBUTES sa;
     SECURITY_DESCRIPTOR sd;
@@ -273,6 +291,10 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
     wn_ipc_server *s;
     char name[WN_PATH_MAX];
     DWORD create_error;
+
+    if (conflict != NULL) {
+        *conflict = 0;
+    }
 
     s = calloc(1, sizeof(*s));
     if (s == NULL) {
@@ -305,6 +327,9 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
     if (s->pipe == INVALID_HANDLE_VALUE) {
         if (create_error == ERROR_ACCESS_DENIED ||
             create_error == ERROR_PIPE_BUSY) {
+            if (conflict != NULL) {
+                *conflict = 1;
+            }
             (void)snprintf(err, err_cap, "another daemon is already running");
         } else {
             (void)snprintf(err, err_cap, "cannot create the IPC pipe");
@@ -438,25 +463,9 @@ int wn_ipc_server_wait(wn_ipc_server *s, char *line, size_t cap, int timeout_ms)
 /* Writes the whole reply. Returns 0 on success. */
 static int write_reply(wn_ipc_server *s, const char *text)
 {
-    DWORD count = 0;
-    DWORD wait;
-
-    (void)ResetEvent(s->event);
-    if (WriteFile(s->pipe, text, (DWORD)strlen(text), &count, &s->ov)) {
-        return 0;
-    }
-    if (GetLastError() != ERROR_IO_PENDING) {
-        return -1;
-    }
-
-    wait = WaitForSingleObject(s->event, 2000);
-    if (wait != WAIT_OBJECT_0) {
-        return -1;
-    }
-    if (!GetOverlappedResult(s->pipe, &s->ov, &count, FALSE)) {
-        return -1;
-    }
-    return 0;
+    /* A byte-mode pipe write may complete with fewer bytes than requested, so
+     * the loop in write_all is required even though a reply is short. */
+    return write_all(s->pipe, &s->ov, text, strlen(text));
 }
 
 int wn_ipc_server_reply(wn_ipc_server *s, const char *text)
@@ -638,11 +647,13 @@ static int client_attempt(const char *path, const char *line, char *reply,
             if (errno == EINTR) {
                 continue;
             }
-            (void)close(fd);
-            /* ECONNRESET after shutdown is the same race as an empty read. */
+            /* ECONNRESET after shutdown is the same race as an empty read, but
+             * a reply that arrived before the reset is still a reply: treat it
+             * as the end of the stream instead of replaying the command. */
             if (errno == ECONNRESET) {
-                return WN_IPC_RETRY;
+                break;
             }
+            (void)close(fd);
             return WN_IPC_ERROR;
         }
         if (got == 0) {
@@ -696,13 +707,39 @@ int wn_ipc_client_send(const char *line, char *reply, size_t cap)
     return WN_IPC_ABSENT;
 }
 
-wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
+int wn_ipc_client_send_wait(const char *line, char *reply, size_t cap)
+{
+    int attempt;
+
+    for (attempt = 0; attempt < 10; attempt++) {
+        int result = wn_ipc_client_send(line, reply, cap);
+
+        if (result != WN_IPC_ABSENT) {
+            return result;
+        }
+        if (attempt < 9) {
+            struct timespec pause;
+
+            pause.tv_sec = 0;
+            pause.tv_nsec = 25000000L;
+            (void)nanosleep(&pause, NULL);
+        }
+    }
+
+    return WN_IPC_ABSENT;
+}
+
+wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap, int *conflict)
 {
     struct sockaddr_un addr;
     wn_ipc_server *s;
     char path[WN_PATH_MAX];
     char lock_path[WN_PATH_MAX];
     int written;
+
+    if (conflict != NULL) {
+        *conflict = 0;
+    }
 
     s = calloc(1, sizeof(*s));
     if (s == NULL) {
@@ -738,6 +775,9 @@ wn_ipc_server *wn_ipc_server_open(char *err, size_t err_cap)
     }
 
     if (flock(s->lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        if (conflict != NULL) {
+            *conflict = 1;
+        }
         (void)snprintf(err, err_cap, "another daemon is already running");
         goto fail;
     }

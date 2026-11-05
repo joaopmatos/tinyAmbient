@@ -459,6 +459,42 @@ static void fill_session(wn_session *session, const session_setup *setup,
 static int handle_reply(const char *reply);
 static int has_kind(const wn_cmd *cmds, int n, wn_cmd_kind kind);
 
+/* A competing start won the single-instance address after this client's probe
+ * but before it bound. Forward the command to the winner instead of failing,
+ * waiting a short window for the winner to finish starting. Returns WN_EXIT_OK
+ * on delivery, WN_EXIT_USAGE if the line is too long, WN_EXIT_IPC otherwise. */
+static int forward_competing_daemon(const wn_cmd *cmds, int n)
+{
+    char line[WN_LINE_MAX];
+    char reply[WN_IPC_REPLY_MAX];
+    size_t length = wn_cmd_format_ipc_line(cmds, n, line, sizeof(line));
+    int result;
+
+    if (length >= sizeof(line)) {
+        wn_cli_error("the command line is too long");
+        return WN_EXIT_USAGE;
+    }
+
+    if (length > 0) {
+        result = wn_platform_ipc_send_wait(line, reply, sizeof(reply));
+    } else {
+        /* A bare start carries no command; success means a daemon answers. */
+        result = wn_platform_ipc_send_wait("status", reply, sizeof(reply));
+    }
+
+    if (result == WN_IPC_OK) {
+        return length > 0 ? handle_reply(reply) : WN_EXIT_OK;
+    }
+    if (result == WN_IPC_ERROR) {
+        wn_cli_error("cannot reach the daemon");
+        return WN_EXIT_IPC;
+    }
+
+    /* Still absent: the competing daemon vanished before answering. */
+    wn_cli_error("another daemon is already running");
+    return WN_EXIT_IPC;
+}
+
 /* --foreground: run the session attached to this terminal (PRD FR-12). It also
  * owns the IPC socket, so forwarded commands work against a foreground daemon
  * exactly as they do against a detached one.
@@ -501,7 +537,7 @@ static int run_foreground(const wn_cmd *cmds, int n, int portable)
         return WN_EXIT_OK;
     }
 
-    ipc = wn_ipc_server_open(err, sizeof(err));
+    ipc = wn_ipc_server_open(err, sizeof(err), NULL);
     if (ipc == NULL) {
         wn_cli_error(err);
         return WN_EXIT_IPC;
@@ -554,10 +590,19 @@ static int run_background(const wn_cmd *cmds, int n, int portable, int argc,
      * saving settings no session applied. Windows cannot inherit this process's
      * handles into a detached copy that way, so its child creates the pipe
      * itself. */
-    ipc = wn_ipc_server_open(err, sizeof(err));
-    if (ipc == NULL) {
-        wn_cli_error(err);
-        return WN_EXIT_IPC;
+    {
+        int conflict = 0;
+
+        ipc = wn_ipc_server_open(err, sizeof(err), &conflict);
+        if (ipc == NULL) {
+            if (conflict) {
+                /* Lost a simultaneous-start race: a daemon now owns the
+                 * address. Forward to it instead of failing (PRD FR-07). */
+                return forward_competing_daemon(cmds, n);
+            }
+            wn_cli_error(err);
+            return WN_EXIT_IPC;
+        }
     }
 #endif
 
@@ -636,11 +681,26 @@ static int run_daemon_child(const wn_cmd *cmds, int n, int portable,
 
     fill_session(&session, &setup, portable, 0);
     session.ready_fd = ready_fd;
-    session.ipc = wn_ipc_server_open(err, sizeof(err));
-    if (session.ipc == NULL) {
-        wn_cli_error(err);
-        wn_engine_destroy(engine);
-        return WN_EXIT_IPC;
+    {
+        int conflict = 0;
+
+        session.ipc = wn_ipc_server_open(err, sizeof(err), &conflict);
+        if (session.ipc == NULL) {
+            if (conflict) {
+                /* Lost the pipe to a competing start. The command is applied by
+                 * the winner, so tell the waiting parent it succeeded instead of
+                 * timing out as if the device never came up. */
+                result = forward_competing_daemon(cmds, n);
+                if (result == WN_EXIT_OK) {
+                    wn_platform_notify_ready(&session, 1);
+                }
+                wn_engine_destroy(engine);
+                return result;
+            }
+            wn_cli_error(err);
+            wn_engine_destroy(engine);
+            return WN_EXIT_IPC;
+        }
     }
 
     result = wn_platform_run(engine, &session);

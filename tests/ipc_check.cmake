@@ -299,6 +299,37 @@ foreach(round RANGE 1 5)
     expect_ok("quit ${round}")
 endforeach()
 
+# --- Simultaneous starts forward instead of failing --------------------------
+#
+# Two invocations that both find no daemon race to take the address. One wins
+# and starts the daemon; the loser must forward and exit 0, never "another
+# daemon is already running" (exit 3). The shell runs both in the same
+# environment, so the loser's forward reaches the winner's daemon.
+wait_no_daemons("before simultaneous starts")
+foreach(round RANGE 1 5)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "XDG_CONFIG_HOME=${XDG}"
+            "XDG_RUNTIME_DIR=${RUNTIME}"
+            "TINYAMBIENT_AUDIO=null"
+            sh -c
+            "\"$1\" >/dev/null 2>&1 & p1=$!; \"$1\" >/dev/null 2>&1 & p2=$!; wait $p1; c1=$?; wait $p2; c2=$?; if [ $c1 -ne 0 ] || [ $c2 -ne 0 ]; then echo \"simultaneous start: exit $c1/$c2\" >&2; exit 1; fi"
+            sh "${BINARY}"
+        RESULT_VARIABLE race)
+    if(NOT race EQUAL 0)
+        message(FATAL_ERROR
+            "ipc_check: simultaneous start failed (round ${round})")
+    endif()
+    count_daemons(count)
+    if(NOT count EQUAL 1)
+        message(FATAL_ERROR
+            "ipc_check: ${count} daemons after a simultaneous start (round ${round})")
+    endif()
+    run_exe(quit)
+    expect_ok("quit after simultaneous start ${round}")
+    wait_no_daemons("simultaneous start ${round}")
+endforeach()
+
 # --- --foreground participates in the single-instance contract ---------------
 #
 # A second foreground start must fail on the address before it persists
