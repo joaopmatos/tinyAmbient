@@ -14,6 +14,7 @@
 
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -67,17 +68,21 @@ static void quit_handler(int sig)
     wn_platform_request_quit();
 }
 
-static long now_ms(void)
+/* Monotonic milliseconds since an arbitrary point. int64_t rather than long:
+ * GetTickCount64() is 64-bit and Windows `long` is 32-bit (LLP64), so a long
+ * return would wrap after ~24.9 days of uptime and break the stop-after timer
+ * and the device-restart backoff. */
+static int64_t now_ms(void)
 {
 #if defined(_WIN32)
-    return (long)GetTickCount64();
+    return (int64_t)GetTickCount64();
 #else
     struct timespec ts;
 
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return 0;
     }
-    return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+    return (int64_t)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 #endif
 }
 
@@ -187,14 +192,14 @@ static void apply_persisted(wn_config *cfg, const wn_cmd *cmd)
  * what "commands apply to the daemon and write configuration" has to mean.
  *
  * Returns 1 when the daemon must quit after replying. */
-static int handle_line(wn_engine *e, wn_session *s, long *deadline,
-                       const char *line, long now, char *reply, size_t cap)
+static int handle_line(wn_engine *e, wn_session *s, int64_t *deadline,
+                       const char *line, int64_t now, char *reply, size_t cap)
 {
     char buffer[WN_LINE_MAX];
     wn_cmd cmds[WN_CMD_MAX];
     wn_config updated;
     char err[128];
-    long new_deadline = *deadline;
+    int64_t new_deadline = *deadline;
     long remaining = WN_STOP_AFTER_SECONDS_OFF;
     int persist = 0;
     int want_status = 0;
@@ -270,9 +275,11 @@ static int handle_line(wn_engine *e, wn_session *s, long *deadline,
 
     if (want_status) {
         if (*deadline > 0) {
-            long left = *deadline - now;
+            int64_t left = *deadline - now;
 
-            remaining = left > 0 ? (left + 999) / 1000 : 1;
+            /* Seconds remaining, rounded up. Bounded by 7 days, so it fits the
+             * 32-bit `long` wn_status_format takes on Windows. */
+            remaining = left > 0 ? (long)((left + 999) / 1000) : 1;
         }
         (void)wn_status_format(reply, cap, wn_engine_is_playing(e),
                                wn_engine_noise(e), wn_engine_volume(e),
@@ -291,8 +298,8 @@ int wn_platform_run(wn_engine *e, wn_session *s)
     char line[WN_LINE_MAX];
     /* Six short lines from FR-08 fit in well under this. */
     char reply[WN_IPC_REPLY_MAX];
-    long deadline = 0;
-    long next_retry = 0;
+    int64_t deadline = 0;
+    int64_t next_retry = 0;
     long stop_fade_ms;
     int restart_pending = 0;
     int attempt = 0;
@@ -348,7 +355,7 @@ int wn_platform_run(wn_engine *e, wn_session *s)
     }
 
     while (!quit_pending()) {
-        long now = now_ms();
+        int64_t now = now_ms();
 
         /* FR-16: a device that stopped or was removed is rebuilt with
          * backoff. The engine is untouched, so parameters and playback state

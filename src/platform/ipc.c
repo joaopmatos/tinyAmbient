@@ -140,15 +140,42 @@ static int client_attempt(const char *path, const char *line, char *reply,
         goto done;
     }
 
+    /* Read until the server disconnects. A reply is not necessarily one line:
+     * `status` is six, so a newline is not the terminator. The server closes
+     * the pipe after writing the reply, and that close ends the read. A broken
+     * or disconnected pipe after some data is the normal end of a reply;
+     * before any data it is the "daemon was leaving" case that the retry loop
+     * in wn_ipc_client_send exists for. */
     while (used + 1 < cap) {
         DWORD got = 0;
 
         (void)ResetEvent(event);
-        if (!ReadFile(pipe, reply + used, (DWORD)(cap - 1 - used), &got, &ov)) {
-            int status = finish_io(pipe, &ov, &got);
+        if (ReadFile(pipe, reply + used, (DWORD)(cap - 1 - used), &got, &ov)) {
+            /* Completed synchronously. */
+        } else {
+            DWORD error = GetLastError();
 
-            if (status != 0) {
-                result = status == WN_IPC_RETRY ? WN_IPC_RETRY : WN_IPC_ERROR;
+            if (error == ERROR_IO_PENDING) {
+                if (WaitForSingleObject(event, WN_IPC_TIMEOUT_MS) !=
+                    WAIT_OBJECT_0) {
+                    (void)CancelIoEx(pipe, &ov);
+                    result = WN_IPC_ERROR;
+                    goto done;
+                }
+                if (!GetOverlappedResult(pipe, &ov, &got, FALSE)) {
+                    error = GetLastError();
+                    if (error == ERROR_BROKEN_PIPE ||
+                        error == ERROR_PIPE_NOT_CONNECTED) {
+                        break;
+                    }
+                    result = WN_IPC_ERROR;
+                    goto done;
+                }
+            } else if (error == ERROR_BROKEN_PIPE ||
+                       error == ERROR_PIPE_NOT_CONNECTED) {
+                break;
+            } else {
+                result = WN_IPC_ERROR;
                 goto done;
             }
         }
@@ -156,9 +183,6 @@ static int client_attempt(const char *path, const char *line, char *reply,
             break;
         }
         used += got;
-        if (memchr(reply, '\n', used) != NULL) {
-            break;
-        }
     }
     reply[used] = '\0';
     result = used == 0 ? WN_IPC_RETRY : WN_IPC_OK;
