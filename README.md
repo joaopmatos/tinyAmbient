@@ -34,7 +34,7 @@ at full level unannounced.
 - One command to start; control it from any terminal afterwards.
 - Remembers your noise type, volume, and mono/stereo setting.
 - Stops on its own after a time you choose.
-- Roughly 126 KB on Linux and 292 KB on Windows. No installer, no runtime, no
+- Roughly 126 KB on Linux and 293 KB on Windows. No installer, no runtime, no
   dependencies beyond the audio stack your desktop already ships.
 
 ## Why this exists

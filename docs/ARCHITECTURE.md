@@ -479,8 +479,10 @@ Windows: the same contract over a byte-mode named pipe. Differences that matter:
   one.
 - The instance is the connection, so a reply must be written and flushed before
   the instance is disconnected; `wn_ipc_server_reply_and_release` keeps that
-  ordering per platform. The client reads until the newline and treats a broken
-  pipe with no bytes as "the daemon was leaving" and retries.
+  ordering per platform. The client reads until the server disconnects — a
+  reply is not necessarily one line, so `status`'s six lines are the
+  terminator, not the newline — and treats a broken pipe with no bytes as "the
+  daemon was leaving" and retries.
 - The client maps `ERROR_PIPE_BUSY` (a live daemon between clients) to
   `WaitNamedPipe` plus a retry, and `ERROR_FILE_NOT_FOUND` to `WN_IPC_ABSENT`.
 

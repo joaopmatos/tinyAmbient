@@ -173,7 +173,7 @@ Rules:
 5. Unknown flags, unknown noise names, and out-of-range values exit 2 with a one-line message.
 6. `--help` and `--version` take precedence over all other arguments.
 7. Content commands are forwarded to the daemon when it exists and executed by a new daemon when it does not. Both paths produce identical results.
-8. A `--render` path beginning with `-` is a usage error (exit 2), like a flag-like value for any other option.
+8. A `--render` path beginning with `-` is a usage error (exit 2), like a flag-like value for any other option. This covers `--render --help`, where the path is flag-like, so this rule wins over rule 6 there.
 
 ## 8. Configuration file
 
