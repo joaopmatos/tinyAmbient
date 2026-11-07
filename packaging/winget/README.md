@@ -4,6 +4,12 @@ Three files describe the portable ZIP release to the Windows Package Manager.
 `joaopmatos.tinyAmbient` is the package identifier; `tinyambient` is the
 moniker and the command it installs.
 
+Every file starts with the `# yaml-language-server: $schema=...` comment. The
+repository requires it, and it is what makes an editor and the validation
+pipeline check the right schema version. Bump it together with
+`ManifestVersion`. The current schema is 1.28.0; `doc/manifest/README.md` in
+`winget-pkgs` lists the versions the repository accepts.
+
 ## Before opening the pull request
 
 The release must be **published**, not a draft: the validation pipeline
