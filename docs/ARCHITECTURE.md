@@ -414,6 +414,17 @@ dispatch, and quit.
   failure a POSIX parent sees on EOF. The child re-runs the arguments rather
   than inheriting memory, which is safe because every step of session setup is
   deterministic from the arguments and the saved configuration.
+- The Windows daemon does not run from the installed binary. Windows locks the
+  image of a running process, so a daemon started from the package directory
+  makes `winget upgrade` fail on the file it is executing. Before creating the
+  child, the parent copies itself to
+  `%LOCALAPPDATA%\tinyAmbient\daemon\tinyambient.exe` and starts that copy. The
+  copy runs after the single-instance address is taken, so only one process
+  writes it; a sharing violation is retried for up to 500 ms while a previous
+  daemon finishes exiting. `--portable` is exempt, because its `config.ini`
+  lives next to the executable and the image path decides where that is. The
+  installed binary is idle once the parent returns, which is what lets a package
+  manager replace or remove it.
 
 ---
 

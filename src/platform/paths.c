@@ -155,7 +155,8 @@ int wn_paths_config_file(char *out, size_t cap, int portable)
 #endif
 }
 
-static int make_directories(char *path, char *err, size_t err_cap)
+static int make_directories(char *path, const char *what, char *err,
+                            size_t err_cap)
 {
 #if defined(_WIN32)
     char *p = path;
@@ -174,8 +175,8 @@ static int make_directories(char *path, char *err, size_t err_cap)
             *p = '\0';
             if (_mkdir(path) != 0 && errno != EEXIST) {
                 *p = separator;
-                (void)snprintf(err, err_cap,
-                               "cannot create the configuration directory");
+                (void)snprintf(err, err_cap, "cannot create the %s directory",
+                               what);
                 return -1;
             }
             *p = separator;
@@ -183,8 +184,7 @@ static int make_directories(char *path, char *err, size_t err_cap)
     }
 
     if (_mkdir(path) != 0 && errno != EEXIST) {
-        (void)snprintf(err, err_cap,
-                       "cannot create the configuration directory");
+        (void)snprintf(err, err_cap, "cannot create the %s directory", what);
         return -1;
     }
 #else
@@ -195,8 +195,8 @@ static int make_directories(char *path, char *err, size_t err_cap)
             *p = '\0';
             if (mkdir(path, 0700) != 0 && errno != EEXIST) {
                 *p = '/';
-                (void)snprintf(err, err_cap,
-                               "cannot create the configuration directory");
+                (void)snprintf(err, err_cap, "cannot create the %s directory",
+                               what);
                 return -1;
             }
             *p = '/';
@@ -204,8 +204,7 @@ static int make_directories(char *path, char *err, size_t err_cap)
     }
 
     if (mkdir(path, 0700) != 0 && errno != EEXIST) {
-        (void)snprintf(err, err_cap,
-                       "cannot create the configuration directory");
+        (void)snprintf(err, err_cap, "cannot create the %s directory", what);
         return -1;
     }
 #endif
@@ -249,8 +248,62 @@ int wn_paths_make_config_dir(const char *file, int portable, char *err,
     }
     *slash = '\0';
 
-    return make_directories(parent, err, err_cap);
+    return make_directories(parent, "configuration", err, err_cap);
 }
+
+#if defined(_WIN32)
+int wn_paths_daemon_image(char *out, size_t cap)
+{
+    const char *override;
+    const char *local;
+
+    if (out == NULL || cap == 0) {
+        return -1;
+    }
+
+    /* The test harness needs a directory of its own: without it, every run
+     * would copy the daemon into the real user profile and a second build
+     * would contend for the same image. */
+    override = getenv("TINYAMBIENT_DAEMON_DIR");
+    if (override != NULL && override[0] != '\0') {
+        return format_path(out, cap, "%s\\tinyambient.exe", override);
+    }
+
+    local = getenv("LOCALAPPDATA");
+    if (local == NULL || local[0] == '\0') {
+        return -1;
+    }
+    return format_path(out, cap, "%s\\tinyAmbient\\daemon\\tinyambient.exe",
+                       local);
+}
+
+int wn_paths_make_daemon_dir(const char *file, char *err, size_t err_cap)
+{
+    char parent[WN_PATH_MAX];
+    char *slash;
+
+    if (file == NULL) {
+        return -1;
+    }
+    if (strlen(file) >= sizeof(parent)) {
+        (void)snprintf(err, err_cap, "daemon path is too long");
+        return -1;
+    }
+    memcpy(parent, file, strlen(file) + 1);
+
+    slash = strrchr(parent, '\\');
+    if (slash == NULL) {
+        slash = strrchr(parent, '/');
+    }
+    if (slash == NULL || slash == parent) {
+        (void)snprintf(err, err_cap, "daemon path has no directory");
+        return -1;
+    }
+    *slash = '\0';
+
+    return make_directories(parent, "daemon", err, err_cap);
+}
+#endif
 
 #if defined(_WIN32)
 void *wn_paths_user_sid(void)

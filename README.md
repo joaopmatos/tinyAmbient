@@ -129,6 +129,16 @@ install.
 No separate runtime is required. You can also skip the `PATH` step and run the
 executable with its full path.
 
+The background process runs from `%LOCALAPPDATA%\tinyAmbient\daemon\`, not from
+the folder you installed. That keeps the installed binary idle, so
+`winget upgrade` can replace it while noise is playing. A running daemon keeps
+the version it started with; `tinyambient --quit` and start again to pick up an
+upgrade. Run `tinyambient --quit` before uninstalling too: the package manager
+removes the binary, and the daemon would otherwise keep playing with no command
+left to reach it. With `--portable` the daemon runs from the unpacked folder
+instead, because its `config.ini` lives there; stop it before replacing those
+files.
+
 ### Run without installing
 
 You can run the binary straight from the folder you extracted:
@@ -184,7 +194,7 @@ full list.
 `--status` prints a short, fixed list of lines:
 
 ```text
-version=1.0.4
+version=1.0.5
 playing=1
 noise=pink
 volume=20

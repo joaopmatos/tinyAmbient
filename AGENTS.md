@@ -1,6 +1,6 @@
 # tinyAmbient — Agent Context
 
-**State:** M8 complete; v1 is done. CMake build, layer headers, size gate, resource gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, IPC on both platforms (Unix socket on Linux, per-user named pipe on Windows), single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows runs the same daemon, IPC, and test suite as Linux. v1.0.1 lowers the saved default volume to 20 and opens each session over 1 s. v1.0.2 makes `play` cancel a running stop fade, fixes the `--foreground` ordering (quit reaches the daemon; the single-instance address is taken before anything is persisted), and gives a second Ctrl+C the default terminate action. v1.0.3 hardens the edges the review found: a private `0700` directory for the XDG-less socket, a directory `fsync` after the config rename, a SID-sized Windows pipe DACL, and shared text helpers in `core/text.c`. v1.0.4 fixes the simultaneous-start race (the losing start forwards instead of failing with exit 3) and hardens the IPC reply paths.
+**State:** M8 complete; v1 is done. CMake build, layer headers, size gate, resource gate, CI skeleton, formatting gate, PCG32, white/pink/brown noise with calibrated gains, `--render` to raw float32 or WAV, miniaudio device and callback, full command parser, engine command handling, INI config with atomic writes, portable mode, status output, parameter atomics, 20 ms play/pause/volume fades, `fade_ms` noise crossfades, the stop-after timer with its 20 s fade-out, the device restart backoff, `--foreground`, IPC on both platforms (Unix socket on Linux, per-user named pipe on Windows), single-instance enforcement, the detached background daemon, command forwarding, daemon-side persistence, and the corresponding CLI, config, engine, session, status, and IPC tests. Windows runs the same daemon, IPC, and test suite as Linux. v1.0.1 lowers the saved default volume to 20 and opens each session over 1 s. v1.0.2 makes `play` cancel a running stop fade, fixes the `--foreground` ordering (quit reaches the daemon; the single-instance address is taken before anything is persisted), and gives a second Ctrl+C the default terminate action. v1.0.3 hardens the edges the review found: a private `0700` directory for the XDG-less socket, a directory `fsync` after the config rename, a SID-sized Windows pipe DACL, and shared text helpers in `core/text.c`. v1.0.4 fixes the simultaneous-start race (the losing start forwards instead of failing with exit 3) and hardens the IPC reply paths. v1.0.5 folds those fixes in and moves the Windows daemon out of the installed directory, to `%LOCALAPPDATA%\tinyAmbient\daemon\tinyambient.exe`, so a running daemon no longer locks the binary `winget` has to replace.
 **Reference branch:** `main`.
 
 | Document | Answers | Authority |
@@ -223,7 +223,7 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | v1.0.1 | v1.0.0 + opening ramp, default volume 20; Fedora 44, GCC 16.2.1 | 116 KB (118,472 bytes) | 150 KB |
 | v1.0.2 | v1.0.1 + stop-fade cancel, `--foreground` ordering, `SA_RESETHAND`; Fedora 44, GCC 16.2.1 | 116 KB (118,544 bytes) | 150 KB |
 | v1.0.3 | v1.0.2 + private IPC fallback dir, config directory fsync, SID-sized DACL, shared text helpers; Fedora 44, GCC 16.2.1 | 116 KB (118,544 bytes) | 150 KB |
-| v1.0.4 | v1.0.3 + simultaneous-start forwarding, IPC reply hardening; Fedora 44, GCC 16.2.1 | 116 KB (118,552 bytes) | 150 KB |
+| v1.0.5 | v1.0.4 fixes + Windows daemon image under `%LOCALAPPDATA%`; Fedora 44, GCC 16.2.1 | 116 KB (118,552 bytes) | 150 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
@@ -243,7 +243,15 @@ v1.0.2 note: the file grew by 72 bytes to 118,544; `.text` is 108,696 (+390) and
 
 v1.0.3 note: the file did not move (118,544 bytes); `.text` is 109,565 (+869) and `.data` 1,404 (+8). The helpers that moved into `core/text.c` cost nothing net — LTO folded the identical bodies — so the growth is the new code: `wn_paths_make_runtime_dir` (mkdir, lstat, ownership and mode checks), `fsync_parent`, and the SID-sized pipe DACL. The Windows payload grew by 512 bytes to **300,032 bytes (293 KB)** when the background path took the same pre-bind ordering as `--foreground`; the gate budget is 307,200 bytes, so the margin is now about 7 KB, the tightest it has been. Linux CI also kept the resource gate at 2,340 KB peak RSS and 0.2% CPU.
 
-v1.0.4 note: the file grew by 8 bytes to 118,552; `.text` is 109,972 (+407) and `.data` 1,408 (+4). The cost is the retry loop in `wn_ipc_client_send_wait` and the `conflict` out-param on `wn_ipc_server_open`; LTO folds the Windows branch out of the Linux binary. The Windows payload and the resource numbers are recorded from the release job, which is where they land.
+v1.0.5 note: the Linux file did not move (118,552 bytes); `.text` is 109,995
+(+23) for the `what` label threaded through `make_directories` and the
+daemon-path plumbing, and `.data`/`.bss` are unchanged. The Linux binary never
+contains the relocation: the whole block sits inside `#if defined(_WIN32)`. The
+Windows payload is measured by the release job; the new code is `CopyFileA`, two
+`getenv` calls, and path building, against the 307,200-byte budget with roughly
+7 KB of headroom. The v1.0.4 fixes land in the same release: simultaneous-start
+forwarding and the IPC reply hardening. The Windows resource numbers are recorded
+from the release job, which is where they land.
 
 The published v1.0.3 Linux archive measures **129,400 bytes (126 KB)**, the same file size as v1.0.0 and v1.0.1 even though its `.text` grew to 117,849: the last loadable segment is page-aligned and the change stays inside its padding. The Ubuntu 24.04/GCC 13 build is about 8 KB larger than the Fedora 44/GCC 16 build in `.text`, which is the same compiler-and-linker gap the v1.0.0 note records.
 
@@ -316,6 +324,7 @@ budget needs the measurement that justifies it, in the same diff (rule 10).
 - **Windows IPC:** the pipe instance is the connection, so the quit reply must be written and flushed before the instance is destroyed. `wn_ipc_server_reply_and_release` owns that ordering per platform; do not call `wn_ipc_server_release` before the reply on Windows, or the client sees a broken pipe instead of `ok`.
 - **Windows daemon start:** the child re-runs the parent's arguments. Everything it does must be deterministic from those arguments plus the saved configuration, or the two paths diverge. `--render` never reaches this path, so the arguments are flags, noise names, and integers that need no command-line quoting.
 - **Windows handle inheritance:** `CreateProcess` with `bInheritHandles` hands over every inheritable handle, including the caller's stdout. A daemon that keeps that pipe open makes `execute_process`, a shell pipeline, or any reader waiting for EOF block until the daemon exits. Pass `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` with only the readiness event.
+- **Windows daemon image:** the background daemon runs from `%LOCALAPPDATA%\tinyAmbient\daemon\tinyambient.exe`, not from the installed binary. Windows locks the image of a running process, so a daemon started from the installed directory makes `winget upgrade` fail on the file it is executing. The copy happens after the single-instance address is taken, so only one process writes it; a copy that hits a sharing violation retries for 500 ms while the previous daemon finishes exiting. `--portable` keeps running from the unpacked folder, because its `config.ini` lives next to the executable. `TINYAMBIENT_DAEMON_DIR` moves the copy, which is how the IPC test avoids writing into the runner's profile.
 
 ---
 

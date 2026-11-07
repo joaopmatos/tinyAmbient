@@ -438,8 +438,31 @@ int wn_platform_ipc_send_wait(const char *line, char *reply, size_t cap)
     return wn_ipc_client_send_wait(line, reply, cap);
 }
 
-int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
-                       char *err, size_t err_cap)
+#if defined(_WIN32)
+/* Copies the installed binary to the per-user daemon path. A daemon that is
+ * still exiting holds its image for a few more milliseconds, so a sharing
+ * violation is worth retrying instead of failing the start. */
+static int install_daemon_image(const char *from, const char *to, char *err,
+                                size_t err_cap)
+{
+    int attempt;
+
+    for (attempt = 0; attempt < 10; attempt++) {
+        if (CopyFileA(from, to, FALSE)) {
+            return 0;
+        }
+        if (attempt < 9) {
+            Sleep(50);
+        }
+    }
+
+    (void)snprintf(err, err_cap, "cannot copy the daemon to %s", to);
+    return -1;
+}
+#endif
+
+int wn_platform_detach(int argc, const char *const *argv, int portable,
+                       intptr_t *ready_fd, char *err, size_t err_cap)
 {
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES inheritable;
@@ -465,6 +488,30 @@ int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
     if (GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe)) == 0) {
         (void)snprintf(err, err_cap, "cannot resolve the executable path");
         return WN_DETACH_ERROR;
+    }
+
+    /* Windows locks the image of a running process, so a daemon started from
+     * the installed directory blocks `winget upgrade` and `winget uninstall`
+     * until it exits. Run the daemon from a copy under LOCALAPPDATA instead:
+     * the installed binary then returns at once and the package directory stays
+     * free. --portable is exempt, because its configuration lives next to the
+     * executable and moving the image would move the configuration with it. */
+    if (!portable) {
+        char image[WN_PATH_MAX];
+
+        if (wn_paths_daemon_image(image, sizeof(image)) != 0) {
+            (void)snprintf(err, err_cap, "cannot resolve the daemon path");
+            return WN_DETACH_ERROR;
+        }
+        if (_stricmp(image, exe) != 0) {
+            if (wn_paths_make_daemon_dir(image, err, err_cap) != 0) {
+                return WN_DETACH_ERROR;
+            }
+            if (install_daemon_image(exe, image, err, err_cap) != 0) {
+                return WN_DETACH_ERROR;
+            }
+            memcpy(exe, image, strlen(image) + 1);
+        }
     }
 
     /* Inheritable so the child can signal it by value. There is no fork on
@@ -561,6 +608,7 @@ int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
 
     (void)argc;
     (void)argv;
+    (void)portable;
 
     if (ready_fd == NULL) {
         (void)snprintf(err, err_cap, "internal: no readiness pipe");

@@ -20,6 +20,12 @@ set(APPDATA "${SANDBOX}/appdata")
 set(CFG "${APPDATA}/tinyAmbient/config.ini")
 file(MAKE_DIRECTORY "${APPDATA}")
 
+# The daemon copies itself out of the installed directory so a package manager
+# can replace the binary while it runs (AGENTS.md 5). Point that copy at the
+# sandbox: a test must never write into the real user profile.
+set(DAEMON_DIR "${SANDBOX}/daemon")
+set(DAEMON_IMAGE "${DAEMON_DIR}/tinyambient.exe")
+
 string(MD5 IPC_TAG "${WORKDIR}")
 set(IPC_NAME "\\\\.\\pipe\\tinyambient-ipc-${IPC_TAG}")
 
@@ -29,6 +35,7 @@ function(run_exe)
             "APPDATA=${APPDATA}"
             "TINYAMBIENT_AUDIO=null"
             "TINYAMBIENT_IPC=${IPC_NAME}"
+            "TINYAMBIENT_DAEMON_DIR=${DAEMON_DIR}"
             "${BINARY}" ${ARGN}
         RESULT_VARIABLE result
         TIMEOUT 60
@@ -82,6 +89,13 @@ endif()
 
 run_exe()
 expect_ok("bare start")
+
+# The daemon must have left the installed directory, or a later winget upgrade
+# would fail on a locked image.
+if(NOT EXISTS "${DAEMON_IMAGE}")
+    message(FATAL_ERROR
+        "ipc_check_win: the daemon image was not copied to ${DAEMON_IMAGE}")
+endif()
 
 run_exe(--status)
 expect_status("status with a daemon" 1 pink 20 0)

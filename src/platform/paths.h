@@ -41,6 +41,18 @@ int wn_paths_make_runtime_dir(char *err, size_t err_cap);
  * the IPC pipe to that user. Free with free(). Declared as void* so including
  * this header does not pull in windows.h. */
 void *wn_paths_user_sid(void);
+
+/* <local-appdata>\tinyAmbient\daemon\tinyambient.exe: the copy of the binary
+ * the background daemon runs from. The installed executable must stay idle so
+ * a package manager can replace it; Windows locks a running image. The value
+ * of TINYAMBIENT_DAEMON_DIR replaces the directory, so the test suite never
+ * writes into the real user profile. Returns 0 or non-zero when the path does
+ * not fit or the environment is unusable. */
+int wn_paths_daemon_image(char *out, size_t cap);
+
+/* Creates the directory that holds `file` (a daemon image path). Returns 0 on
+ * success or non-zero with a message in `err`. */
+int wn_paths_make_daemon_dir(const char *file, char *err, size_t err_cap);
 #endif
 
 #endif /* WN_PLATFORM_PATHS_H */

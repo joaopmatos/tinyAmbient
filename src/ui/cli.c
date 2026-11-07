@@ -620,7 +620,8 @@ static int run_background(const wn_cmd *cmds, int n, int portable, int argc,
     fill_session(&session, &setup, portable, 0);
     session.ipc = ipc;
 
-    result = wn_platform_detach(argc, argv, &ready_fd, err, sizeof(err));
+    result =
+        wn_platform_detach(argc, argv, portable, &ready_fd, err, sizeof(err));
     if (result == WN_DETACH_ERROR) {
         wn_cli_error(err);
         wn_ipc_server_close(session.ipc);

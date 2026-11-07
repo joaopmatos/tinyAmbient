@@ -109,7 +109,7 @@ Single user: a developer working on two machines, preferring keyboard and termin
 **FR-08 Status output.** `--status` prints exactly six lines on stdout, in this order, with no spaces around `=`, each terminated by a newline:
 
 ```
-version=1.0.4
+version=1.0.5
 playing=1
 noise=pink
 volume=20
@@ -131,7 +131,7 @@ stop_after=off
 
 **FR-14 Exit codes and diagnostics.** Exit codes: `0` success, `1` runtime failure (audio device, config write, render I/O), `2` usage error, `3` IPC failure. Errors print to stderr prefixed with `tinyambient: `.
 
-**FR-15 Version and help.** `--version` prints `tinyambient 1.0.4` and exits 0. `--help` prints usage and exits 0.
+**FR-15 Version and help.** `--version` prints `tinyambient 1.0.5` and exits 0. `--help` prints usage and exits 0.
 
 **FR-16 Device failure recovery.** When the audio device stops or is removed, the daemon retries initialization with backoff (100 ms, 500 ms, 2 s, then every 5 s). Parameters and playback state are preserved. Resuming produces no click.
 
@@ -257,12 +257,22 @@ persists anything, and restores the default terminate action on a second
 Ctrl+C. v1.0.3 hardens the edges the review found without changing the CLI:
 the XDG-less socket gets a private `0700` directory, the config write fsyncs
 the directory after the rename, the Windows pipe DACL is sized from the real
-SID, and the duplicated text helpers moved into `core/text.c`. v1.0.4 fixes a
-simultaneous-start race (two invocations that both find no daemon and race to
-take the address now both exit 0, the loser forwarding to the winner instead
-of failing with "another daemon is already running"), stops the POSIX client
-from replaying a command after a partial reply, and loops the Windows reply
-write.
+SID, and the duplicated text helpers moved into `core/text.c`. v1.0.5 folds in
+the fixes prepared for v1.0.4 and makes the Windows daemon survivable across
+package upgrades:
+
+- Two invocations that both find no daemon and race to take the address now
+  both exit 0, the loser forwarding to the winner instead of failing with
+  "another daemon is already running".
+- The POSIX client no longer replays a command after a partial reply, and the
+  Windows reply write loops instead of assuming one write delivers everything.
+- On Windows, a background daemon is copied to
+  `<local-appdata>\tinyAmbient\daemon\tinyambient.exe` and runs from there. A
+  running process locks its image, so a daemon started from the installed
+  directory made `winget upgrade` fail on the file it was executing. The
+  installed binary now returns immediately and stays replaceable. `--portable`
+  is exempt: its `config.ini` lives next to the executable, so the daemon keeps
+  running from the unpacked folder.
 
 ## 12. Risks
 
@@ -294,7 +304,7 @@ write.
 | D-13 | `sleep_minutes` dropped from config; timer is session state | Decided |
 | D-14 | Default stereo uses independent per-channel generators | Decided |
 | D-15 | Repository license: MIT | Decided |
-| D-16 | Windows IPC and daemon startup land at M8: named pipes with a per-user DACL, and a detached copy of the executable instead of a fork | Decided |
+| D-16 | Windows IPC and daemon startup land at M8: named pipes with a per-user DACL, and a detached copy of the executable instead of a fork. v1.0.5 moves that copy to `%LOCALAPPDATA%\tinyAmbient\daemon\tinyambient.exe`, so the installed binary is never locked by a running daemon and a package manager can replace it; `--portable` keeps running from the unpacked folder | Decided |
 | D-17 | A session starts at volume 20 and opens over 1 s (v1.0.1); `--render` keeps the 20 ms fade | Decided |
 
 ## 14. Open questions

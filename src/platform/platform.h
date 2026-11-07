@@ -83,8 +83,13 @@ int wn_platform_ipc_send_wait(const char *line, char *reply, size_t cap);
  * pipe it must report on. Windows has no fork, so this only ever runs in the
  * parent: it starts a detached copy of itself with the same arguments and
  * returns WN_DETACH_PARENT or WN_DETACH_PARENT_FAIL. `argv` is what the copy
- * re-runs, and is ignored on POSIX. */
-int wn_platform_detach(int argc, const char *const *argv, intptr_t *ready_fd,
-                       char *err, size_t err_cap);
+ * re-runs, and is ignored on POSIX.
+ *
+ * `portable` is the session's --portable flag. On Windows a non-portable daemon
+ * is copied to <local-appdata>\tinyAmbient\daemon\tinyambient.exe and started
+ * from there, so the installed binary is never locked by a running process
+ * (see wn_paths_daemon_image). POSIX ignores it. */
+int wn_platform_detach(int argc, const char *const *argv, int portable,
+                       intptr_t *ready_fd, char *err, size_t err_cap);
 
 #endif /* WN_PLATFORM_PLATFORM_H */
