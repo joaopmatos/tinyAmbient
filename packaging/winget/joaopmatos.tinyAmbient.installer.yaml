@@ -8,7 +8,7 @@ NestedInstallerFiles:
 Installers:
 - Architecture: x64
   InstallerUrl: https://github.com/joaopmatos/tinyAmbient/releases/download/v1.0.5/tinyambient-1.0.5-windows-x86_64.zip
-  InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+  InstallerSha256: 721170F5FC6433CA5616019F66AFFD8CCB83D6E2CAB4B9F3233E3473DAA076AB
 ManifestType: installer
 ManifestVersion: 1.28.0
 ReleaseDate: 2026-11-07

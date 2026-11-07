@@ -224,6 +224,7 @@ Recorded per AGENTS.md rule 6. Enforced by the `size-check` target and by the `s
 | v1.0.2 | v1.0.1 + stop-fade cancel, `--foreground` ordering, `SA_RESETHAND`; Fedora 44, GCC 16.2.1 | 116 KB (118,544 bytes) | 150 KB |
 | v1.0.3 | v1.0.2 + private IPC fallback dir, config directory fsync, SID-sized DACL, shared text helpers; Fedora 44, GCC 16.2.1 | 116 KB (118,544 bytes) | 150 KB |
 | v1.0.5 | v1.0.4 fixes + Windows daemon image under `%LOCALAPPDATA%`; Fedora 44, GCC 16.2.1 | 116 KB (118,552 bytes) | 150 KB |
+| v1.0.5 | Same source, Windows 10/11, MSVC 19; the relocation adds `CopyFileA` and two `getenv` calls | 295 KB (302,080 bytes) | 300 KB |
 
 M2 note: the file size did not move, but `.text` grew from 4785 to 5709 bytes (+924). The ELF header and section alignment swallowed the difference at this size.
 
@@ -246,12 +247,16 @@ v1.0.3 note: the file did not move (118,544 bytes); `.text` is 109,565 (+869) an
 v1.0.5 note: the Linux file did not move (118,552 bytes); `.text` is 109,995
 (+23) for the `what` label threaded through `make_directories` and the
 daemon-path plumbing, and `.data`/`.bss` are unchanged. The Linux binary never
-contains the relocation: the whole block sits inside `#if defined(_WIN32)`. The
-Windows payload is measured by the release job; the new code is `CopyFileA`, two
-`getenv` calls, and path building, against the 307,200-byte budget with roughly
-7 KB of headroom. The v1.0.4 fixes land in the same release: simultaneous-start
-forwarding and the IPC reply hardening. The Windows resource numbers are recorded
-from the release job, which is where they land.
+contains the relocation: the whole block sits inside `#if defined(_WIN32)`.
+The Windows executable measures **302,080 bytes (295 KB)**, 2,048 bytes above
+v1.0.3 and 5,120 bytes under the 307,200-byte gate: the tightest margin the
+project has had, so the next Windows-side change needs its own measurement
+before it lands. The published Linux archive binary, built on Ubuntu 24.04 with
+GCC 13, measures **133,496 bytes (130 KB)**, 4,096 bytes above v1.0.3 even
+though the local `.text` barely moved: the v1.0.4 IPC fixes and the v1.0.5
+plumbing pushed the last loadable segment across a page boundary, which costs a
+whole page. The v1.0.4 fixes land in the same release: simultaneous-start
+forwarding and the IPC reply hardening.
 
 The published v1.0.3 Linux archive measures **129,400 bytes (126 KB)**, the same file size as v1.0.0 and v1.0.1 even though its `.text` grew to 117,849: the last loadable segment is page-aligned and the change stays inside its padding. The Ubuntu 24.04/GCC 13 build is about 8 KB larger than the Fedora 44/GCC 16 build in `.text`, which is the same compiler-and-linker gap the v1.0.0 note records.
 
