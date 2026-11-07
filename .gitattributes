@@ -1,0 +1,12 @@
+# Paths a source build does not read. `git archive` applies these rules, so the
+# tarball attached to a release carries the tree the compiler and the tests use,
+# and not the CI configuration, the README images, or the agent instructions.
+# See .github/workflows/release.yml.
+.github/                  export-ignore
+.clang-format             export-ignore
+AGENTS.md                 export-ignore
+packaging/                export-ignore
+docs/demo.gif             export-ignore
+docs/logo.svg             export-ignore
+docs/social-preview.png   export-ignore
+docs/social-preview.svg   export-ignore
