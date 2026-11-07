@@ -1,0 +1,198 @@
+.TH TINYAMBIENT 1 "November 2026" "tinyAmbient 1.0.5" "User Commands"
+.SH NAME
+tinyambient \- white, pink, and brown noise from the terminal
+.SH SYNOPSIS
+.B tinyambient
+[\fIcommand\fR] [\fIoption\fR]...
+.SH DESCRIPTION
+.B tinyAmbient
+generates white, pink, and brown noise and plays it through the audio stack the
+desktop already runs. It opens no network connection and needs no runtime beyond
+the C library and the system audio server.
+.PP
+The first invocation starts a small background process; every later invocation
+forwards its command to that process. A session therefore survives between
+terminals and shells. One daemon runs per user session: a second start forwards
+instead of failing.
+.PP
+Commands may be written with or without a leading
+.BR \-\- :
+.B tinyambient noise brown
+and
+.B tinyambient \-\-noise brown
+do the same thing.
+.SH COMMANDS
+.TP
+.B play
+Start or resume playback.
+.TP
+.B pause
+Pause playback and keep the daemon alive.
+.TP
+.B toggle
+Switch between playing and paused.
+.TP
+.BI "noise " type
+Select
+.BR white ,
+.BR pink ,
+or
+.BR brown .
+The change crossfades over
+.IR fade_ms .
+.TP
+.BI "volume " level
+Set the volume, 0 to 100.
+.TP
+.BI "stop-after " "minutes|off"
+Stop playback after
+.I minutes
+(1 to 10080), fading out over 20 seconds.
+.B off
+cancels a timer that is already running.
+.TP
+.B status
+Print the current state as six lines of
+.IR key = value .
+.TP
+.B quit
+Stop the background process.
+.SH OPTIONS
+.TP
+.BI "\-\-noise " type
+Same as the
+.B noise
+command.
+.TP
+.BI "\-\-volume " level
+Same as the
+.B volume
+command.
+.TP
+.BI "\-\-stop-after " "minutes|off"
+Same as the
+.B stop-after
+command.
+.TP
+.B \-\-mono
+Generate one channel and send it to both ears.
+.TP
+.B \-\-stereo
+Use independent generators per channel. This is the default.
+.TP
+.B \-\-portable
+Read and write
+.I config.ini
+next to the executable instead of the per-user configuration directory.
+.TP
+.B \-\-foreground
+Keep the daemon attached to the terminal and log lifecycle events to standard
+error. The process does not detach.
+.TP
+.BI "\-\-render " file
+Write noise to
+.I file
+instead of playing it. A
+.B .wav
+extension adds a WAV header; any other extension writes raw 32-bit float
+samples. The render defaults are
+.BR white ,
+volume 100, 10 seconds, seed 1, and stereo.
+.TP
+.BI "\-\-seconds " n
+Length of the render, 1 to 3600 seconds.
+.TP
+.BI "\-\-seed " n
+Seed for the render. The same seed and arguments always produce the same file.
+.TP
+.B \-\-status
+Print the state without starting a daemon.
+.TP
+.B \-\-version
+Print the version and exit.
+.TP
+.B \-\-help
+Print usage and exit.
+.SH STATUS
+.B \-\-status
+prints exactly six lines:
+.PP
+.nf
+version=1.0.5
+playing=1
+noise=pink
+volume=20
+mono=0
+stop_after=off
+.fi
+.PP
+.B playing
+is 1 while audio runs.
+.B mono
+is 1 when one channel is duplicated to both ears.
+.B stop_after
+is either
+.B off
+or the number of seconds left. The format is stable and intended for scripts.
+.PP
+With no daemon running,
+.B \-\-status
+reads the configuration and reports
+.B playing=0
+and
+.BR stop_after=off ,
+without starting one.
+.SH FILES
+.TP
+.I $XDG_CONFIG_HOME/tinyambient/config.ini
+Per-user configuration on Linux, falling back to
+.IR ~/.config/tinyambient/config.ini .
+The file is small INI text; unknown keys and comments survive a rewrite.
+.TP
+.I %APPDATA%\\tinyAmbient\\config.ini
+Per-user configuration on Windows.
+.TP
+.I $XDG_RUNTIME_DIR/tinyambient.sock
+The daemon's Unix socket on Linux, mode 0600. Without
+.BR XDG_RUNTIME_DIR
+the socket lives in a 0700 per-user directory under
+.B TMPDIR
+or
+.IR /tmp .
+.TP
+.I %LOCALAPPDATA%\\tinyAmbient\\daemon\\tinyambient.exe
+The copy of the binary the Windows daemon runs from. It lives outside the
+installed directory so a package manager can replace the installed binary while
+noise plays.
+.SH ENVIRONMENT
+.TP
+.B TINYAMBIENT_AUDIO
+Set to
+.B null
+to use the null audio backend. Intended for the test suite and for machines
+without a sound card.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Runtime failure: no audio device, or the configuration could not be written.
+.TP
+.B 2
+Invalid command line.
+.TP
+.B 3
+IPC failure: another daemon owns the single-instance address, or a command
+could not be delivered.
+.SH EXAMPLES
+.nf
+tinyambient \-\-noise pink
+tinyambient \-\-volume 35
+tinyambient \-\-stop-after 90
+tinyambient \-\-status
+tinyambient \-\-quit
+tinyambient \-\-render noise.wav \-\-noise brown \-\-seconds 30 \-\-seed 42
+.fi
+.SH SEE ALSO
+https://github.com/joaopmatos/tinyAmbient
