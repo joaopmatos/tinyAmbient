@@ -204,6 +204,20 @@ elseif(TA_SANITIZE AND MSVC)
     target_link_options(tinyambient PRIVATE /fsanitize=address)
 endif()
 
+# --- Install layout ----------------------------------------------------------
+#
+# AUR and COPR build from source and call `cmake --install`. The destinations
+# live here, not in the packaging files: five manifests would otherwise each
+# carry their own idea of where the binary and the man page go (AGENTS.md 5).
+# The `install` ctest entry below turns a missing file into a failed build.
+
+include(GNUInstallDirs)
+
+install(TARGETS tinyambient RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES docs/tinyambient.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/tinyambient)
+install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/tinyambient)
+
 # --- Size measurement --------------------------------------------------------
 #
 # Recorded at every milestone (AGENTS.md 6.6). Both a manual target and a ctest
@@ -330,6 +344,16 @@ add_test(NAME cli
         -DBINARY=$<TARGET_FILE:tinyambient>
         -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)
+
+# Install layout: a package manager runs `cmake --install` and expects the
+# binary, the man page, the licence, and the README at the documented paths.
+# A missing file fails here instead of in a distribution build.
+add_test(NAME install
+    COMMAND ${CMAKE_COMMAND}
+        -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DCONFIG=$<CONFIG>
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 
 # Config persistence, status output, and portable mode (PRD FR-06, FR-08,
 # FR-11, FR-13). Runs against a sandboxed XDG_CONFIG_HOME/APPDATA. The expected
